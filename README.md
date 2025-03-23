@@ -25,7 +25,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 然后克隆仓库并构建：
 
 ```bash
-git clone https://github.com/yourusername/rssh.git
+git clone https://github.com/robbinhan/rssh.git
 cd rssh
 cargo build --release
 ```
