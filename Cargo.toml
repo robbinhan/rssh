@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "一个用Rust编写的SSH连接管理工具"
 
+[[bin]]
+name = "rssh"
+path = "src/main.rs"
+
+[[bin]]
+name = "rzsz-proxy"
+path = "src/rzsz_proxy.rs"
+
 [dependencies]
 ssh2 = "0.9.4"
 clap = { version = "4.3.0", features = ["derive"] }
@@ -26,3 +34,4 @@ tokio = { version = "1.32.0", features = ["full"] }
 tokio-util = "0.7.0"
 futures = "0.3.28"
 async-trait = "0.1.75"
+shell-escape = "0.1.5"

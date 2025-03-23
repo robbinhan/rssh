@@ -124,6 +124,126 @@ rssh connect myserver --mode russh
 rssh connect myserver --command "ls -la"
 ```
 
+### 在连接状态下使用rzsz传输文件
+
+rssh支持在连接到服务器后直接使用rz和sz命令传输文件，支持两种模式：
+
+1. **使用内置的rzsz代理服务** (推荐模式)：
+   ```bash
+   # 使用--rzsz参数启用rzsz代理功能
+   rssh connect myserver --mode system --rzsz
+   ```
+
+2. **使用默认的SSH库模式**：
+   ```bash
+   # 使用library模式，不需要额外参数
+   rssh connect myserver --mode library
+   ```
+
+连接后，在远程服务器上：
+```bash
+# 下载文件：在远程服务器上执行，将弹出本地保存对话框
+sz filename.txt  # 将远程文件下载到本地
+
+# 上传文件：在远程服务器上执行，将弹出本地文件选择对话框
+rz  # 将本地文件上传到远程服务器
+```
+
+**注意事项:**
+1. 使用rzsz功能需要在本地和远程服务器上都安装`lrzsz`包
+2. 本地安装方法：
+   - MacOS: `brew install lrzsz`
+   - Ubuntu/Debian: `sudo apt-get install lrzsz`
+   - CentOS/RHEL: `sudo yum install lrzsz`
+3. 远程服务器安装方法：
+   - Ubuntu/Debian: `sudo apt-get install lrzsz`
+   - CentOS/RHEL: `sudo yum install lrzsz`
+4. 上传/下载时可能会出现乱码，这是正常现象，代表文件正在传输
+5. 文件传输完成会显示成功或失败信息
+
+**兼容性问题：**
+由于ZMODEM协议需要特定的终端环境支持，在以下情况下可能不工作：
+1. 某些终端模拟器不完全支持ZMODEM协议
+2. 文件较大时可能会超时
+3. 本地与远程的lrzsz版本不兼容
+
+如果遇到rzsz传输问题，建议使用rssh的专用上传下载命令：
+```bash
+# 上传本地文件到远程服务器
+rssh upload myserver local_file.txt /path/on/remote/server/
+
+# 从远程服务器下载文件到本地
+rssh download myserver /path/on/remote/server/file.txt local_file.txt
+```
+
+**高级调试:**
+如果遇到传输问题，可以查看以下日志文件：
+- `/tmp/rz_debug.log` - 下载日志
+- `/tmp/sz_debug.log` - 上传日志
+
+支持的平台:
+- MacOS (使用AppleScript弹出文件选择对话框)
+- Linux (使用zenity弹出文件选择对话框，需要安装zenity)
+- 其他平台将使用命令行方式进行文件选择
+
+### 上传文件到服务器
+
+```bash
+# 上传文件（将在远程使用相同的文件名）
+rssh upload myserver local_file.txt
+
+# 指定远程路径
+rssh upload myserver local_file.txt /path/to/remote_file.txt
+
+# 使用SFTP传输
+rssh upload myserver local_file.txt --mode sftp
+
+# 使用Kitty传输协议（如果您使用的是Kitty终端）
+rssh upload myserver local_file.txt --mode kitty
+
+# 自动选择最佳传输方式（默认）
+rssh upload myserver local_file.txt --mode auto
+```
+
+### 从服务器下载文件
+
+```bash
+# 下载文件（将在本地使用相同的文件名）
+rssh download myserver /path/to/remote_file.txt
+
+# 指定本地路径
+rssh download myserver /path/to/remote_file.txt local_file.txt
+
+# 使用SFTP传输
+rssh download myserver /path/to/remote_file.txt --mode sftp
+
+# 使用Kitty传输协议（如果您使用的是Kitty终端）
+rssh download myserver /path/to/remote_file.txt --mode kitty
+
+# 自动选择最佳传输方式（默认）
+rssh download myserver /path/to/remote_file.txt --mode auto
+```
+
+#### 传输模式
+
+RSSH支持多种文件传输模式：
+
+1. `auto` - 自动选择最佳传输方式（默认）:
+   - 如果检测到Kitty终端，会使用Kitty传输协议
+   - 否则会使用SCP
+   
+2. `scp` - 使用SCP传输（最广泛支持的方式）
+
+3. `sftp` - 使用SFTP传输（更安全，支持断点续传）
+
+4. `kitty` - 使用Kitty终端内置的传输协议：
+   - 只有在使用Kitty终端时才可用
+   - 需要安装Kitty终端 (https://sw.kovidgoyal.net/kitty/)
+   - 比rzsz更现代、更可靠
+   - 支持更大的文件和进度显示
+   
+**提示：** 在Kitty终端中，优先使用Kitty传输协议或auto模式，它比传统的rzsz更现代、更可靠，且不会在传输过程中显示乱码。
+
 ### 编辑服务器
 
 ```bash
@@ -162,4 +282,4 @@ rssh connect myserver --mode russh
 
 ## 许可证
 
-MIT 
+MIT

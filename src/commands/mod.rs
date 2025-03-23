@@ -33,6 +33,19 @@ pub enum ConnectionMode {
     Russh,
 }
 
+/// 文件传输模式
+#[derive(Copy, Clone, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub enum TransferMode {
+    /// 使用SCP传输文件（默认）
+    Scp,
+    /// 使用SFTP传输文件
+    Sftp,
+    /// 使用Kitty传输协议（如果可用）
+    Kitty,
+    /// 自动选择最佳传输方式
+    Auto,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// 添加新的服务器
@@ -80,15 +93,24 @@ enum Commands {
     /// 连接到服务器
     Connect {
         /// 服务器ID或名称
+        #[arg(index = 1)]
         server: String,
         
-        /// 是否仅执行命令而不打开交互式shell
+        /// 在服务器上执行的命令
         #[arg(short, long)]
         command: Option<String>,
         
         /// 连接方式
-        #[arg(short, long, value_enum, default_value = "library")]
+        #[arg(short, long, value_enum, default_value = "system")]
         mode: ConnectionMode,
+        
+        /// 启用rzsz文件传输功能（使用代理）
+        #[arg(long)]
+        rzsz: bool,
+        
+        /// 对于kitty终端，使用kitten ssh进行连接
+        #[arg(long)]
+        kitten: bool,
     },
     
     /// 删除服务器
@@ -101,6 +123,44 @@ enum Commands {
     Edit {
         /// 服务器ID或名称
         server: String,
+    },
+    
+    /// 上传文件到远程服务器
+    Upload {
+        /// 服务器ID或名称
+        #[arg(index = 1)]
+        server: String,
+        
+        /// 本地文件路径
+        #[arg(index = 2)]
+        local_path: PathBuf,
+        
+        /// 远程目标路径（如果不指定，将使用与本地相同的文件名）
+        #[arg(index = 3)]
+        remote_path: Option<String>,
+        
+        /// 传输模式
+        #[arg(short, long, value_enum, default_value = "auto")]
+        mode: TransferMode,
+    },
+    
+    /// 从远程服务器下载文件
+    Download {
+        /// 服务器ID或名称
+        #[arg(index = 1)]
+        server: String,
+        
+        /// 远程文件路径
+        #[arg(index = 2)]
+        remote_path: String,
+        
+        /// 本地目标路径（如果不指定，将使用与远程相同的文件名）
+        #[arg(index = 3)]
+        local_path: Option<PathBuf>,
+        
+        /// 传输模式
+        #[arg(short, long, value_enum, default_value = "auto")]
+        mode: TransferMode,
     },
     
     /// 从 SSH 配置文件导入服务器
@@ -291,7 +351,7 @@ pub fn run() -> Result<()> {
             println!("\n提示: 使用 {} 连接到服务器", "rssh connect <ID或名称>".bright_yellow());
         },
         
-        Commands::Connect { server, command, mode } => {
+        Commands::Connect { server, command, mode, rzsz, kitten } => {
             // 首先尝试按ID查找
             let server_config = config_manager.get_server(&server)?;
             
@@ -337,10 +397,10 @@ pub fn run() -> Result<()> {
                         ssh_client.start_shell()?;
                     },
                     ConnectionMode::System => {
-                        connect_via_system_ssh(&server_config)?;
+                        connect_via_system_ssh(&server_config, rzsz, kitten)?;
                     },
                     ConnectionMode::Exec => {
-                        ssh_command_connect(&server_config)?;
+                        ssh_command_connect(&server_config, kitten)?;
                     },
                     ConnectionMode::Debug => {
                         let ssh_client = SshClient::connect(&server_config)?;
@@ -518,6 +578,94 @@ pub fn run() -> Result<()> {
                 println!("服务器更新成功");
             } else {
                 println!("服务器更新失败");
+            }
+        },
+        
+        Commands::Upload { server, local_path, remote_path, mode } => {
+            // 首先尝试按ID查找
+            let server_config = config_manager.get_server(&server)?;
+            
+            // 如果按ID找不到，尝试按名称查找
+            let server_config = if server_config.is_none() {
+                let servers = config_manager.list_servers()?;
+                servers.into_iter().find(|s| s.name == server)
+            } else {
+                server_config
+            };
+            
+            let server_config = match server_config {
+                Some(s) => s,
+                None => return Err(anyhow::anyhow!("找不到指定的服务器: {}", server)),
+            };
+            
+            println!("准备上传文件到 {}@{}:{}...", 
+                server_config.username.bright_yellow(), 
+                server_config.host.bright_green(), 
+                server_config.port.to_string().bright_blue()
+            );
+            
+            // 根据指定的模式选择使用SCP还是SFTP
+            match mode {
+                TransferMode::Scp => {
+                    // 使用SCP
+                    crate::utils::upload_file(&server_config, &local_path, remote_path)?;
+                },
+                TransferMode::Sftp => {
+                    // 使用SFTP作为备选方案
+                    crate::utils::upload_file_sftp(&server_config, &local_path, remote_path)?;
+                },
+                TransferMode::Kitty => {
+                    // 使用Kitty作为备选方案
+                    crate::utils::upload_file_kitty(&server_config, &local_path, remote_path)?;
+                },
+                TransferMode::Auto => {
+                    // 自动选择最佳传输方式
+                    crate::utils::upload_file_auto(&server_config, &local_path, remote_path)?;
+                }
+            }
+        },
+        
+        Commands::Download { server, remote_path, local_path, mode } => {
+            // 首先尝试按ID查找
+            let server_config = config_manager.get_server(&server)?;
+            
+            // 如果按ID找不到，尝试按名称查找
+            let server_config = if server_config.is_none() {
+                let servers = config_manager.list_servers()?;
+                servers.into_iter().find(|s| s.name == server)
+            } else {
+                server_config
+            };
+            
+            let server_config = match server_config {
+                Some(s) => s,
+                None => return Err(anyhow::anyhow!("找不到指定的服务器: {}", server)),
+            };
+            
+            println!("准备从 {}@{}:{} 下载文件...", 
+                server_config.username.bright_yellow(), 
+                server_config.host.bright_green(), 
+                server_config.port.to_string().bright_blue()
+            );
+            
+            // 根据指定的模式选择使用SCP还是SFTP
+            match mode {
+                TransferMode::Scp => {
+                    // 使用SCP
+                    crate::utils::download_file(&server_config, &remote_path, local_path)?;
+                },
+                TransferMode::Sftp => {
+                    // 使用SFTP作为备选方案
+                    crate::utils::download_file_sftp(&server_config, &remote_path, local_path)?;
+                },
+                TransferMode::Kitty => {
+                    // 使用Kitty作为备选方案
+                    crate::utils::download_file_kitty(&server_config, &remote_path, local_path)?;
+                },
+                TransferMode::Auto => {
+                    // 自动选择最佳传输方式
+                    crate::utils::download_file_auto(&server_config, &remote_path, local_path)?;
+                }
             }
         },
         

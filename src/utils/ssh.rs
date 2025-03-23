@@ -235,6 +235,14 @@ impl SshClient {
                         debug_log(&format!("键盘输入: {}", key_codes))?;
                     }
                     
+                    // 检测并处理rzsz命令
+                    if let Ok(handled) = crate::utils::handle_rzsz(&stdin_buf[0..read_result as usize], &mut channel) {
+                        if handled {
+                            debug_log("rzsz命令已处理")?;
+                            continue;
+                        }
+                    }
+                    
                     // 将数据发送到远程
                     match channel.write(&stdin_buf[0..read_result as usize]) {
                         Ok(n) => {
