@@ -2,8 +2,13 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use serde_json::{json, Value};
+use std::fs;
+use std::fs::File;
+use std::io::Write;
 
 use crate::models::{AuthType, ServerConfig};
+use crate::utils::ssh_config::expand_tilde;
 
 pub struct ConfigManager {
     conn: Arc<Mutex<Connection>>,
@@ -185,5 +190,102 @@ impl ConfigManager {
         )?;
         
         Ok(count > 0)
+    }
+
+    pub fn export_config(&self, export_path: &PathBuf) -> Result<()> {
+        // 创建导出目录
+        fs::create_dir_all(export_path)
+            .with_context(|| format!("无法创建导出目录: {}", export_path.display()))?;
+
+        // 创建keys子目录用于存储私钥文件
+        let keys_dir = export_path.join("keys");
+        fs::create_dir_all(&keys_dir)
+            .with_context(|| format!("无法创建keys目录: {}", keys_dir.display()))?;
+
+        let servers = self.list_servers()?;
+        let mut processed_keys = std::collections::HashSet::new();
+
+        // 处理每个服务器的私钥文件
+        for server in &servers {
+            if let AuthType::Key(key_path) = &server.auth_type {
+                if !processed_keys.contains(key_path) {
+                    processed_keys.insert(key_path.clone());
+                    
+                    // 展开路径中的 ~
+                    let expanded_key_path = PathBuf::from(expand_tilde(key_path));
+                    
+                    // 检查私钥文件是否存在
+                    if !expanded_key_path.exists() {
+                        println!("警告: 私钥文件不存在，跳过: {}", key_path);
+                        continue;
+                    }
+                    
+                    // 获取私钥文件名
+                    let key_filename = expanded_key_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown_key");
+                    
+                    // 复制私钥文件到keys目录
+                    let target_path = keys_dir.join(key_filename);
+                    fs::copy(&expanded_key_path, &target_path)
+                        .with_context(|| format!("无法复制私钥文件: {} -> {}", expanded_key_path.display(), target_path.display()))?;
+                }
+            }
+        }
+
+        // 创建配置文件
+        let config = json!({
+            "version": "1.0",
+            "servers": servers,
+        });
+        
+        let json_string = serde_json::to_string_pretty(&config)?;
+        let config_file = export_path.join("config.json");
+        fs::write(&config_file, json_string)
+            .with_context(|| format!("无法写入配置文件: {}", config_file.display()))?;
+
+        // 创建README文件
+        let readme_content = format!(
+            "RSSH 配置备份\n\
+             ============\n\n\
+             导出时间: {}\n\n\
+             目录结构:\n\
+             - config.json: 服务器配置文件\n\
+             - keys/: 私钥文件目录\n\n\
+             导入说明:\n\
+             1. 确保所有私钥文件已正确放置在 ~/.ssh/ 目录下\n\
+             2. 使用命令 'rssh import-config <导出目录>' 导入配置\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
+        
+        let readme_file = export_path.join("README.md");
+        fs::write(&readme_file, readme_content)
+            .with_context(|| format!("无法写入README文件: {}", readme_file.display()))?;
+        
+        Ok(())
+    }
+
+    pub fn import_config(&self, import_path: &PathBuf) -> Result<()> {
+        // 检查是否是目录
+        if !import_path.is_dir() {
+            return Err(anyhow::anyhow!("导入路径必须是目录: {}", import_path.display()));
+        }
+
+        // 读取配置文件
+        let config_file = import_path.join("config.json");
+        let json_string = fs::read_to_string(&config_file)
+            .with_context(|| format!("无法读取配置文件: {}", config_file.display()))?;
+        
+        let config: Value = serde_json::from_str(&json_string)?;
+        
+        if let Some(servers) = config.get("servers").and_then(|s| s.as_array()) {
+            for server_json in servers {
+                let server: ServerConfig = serde_json::from_value(server_json.clone())?;
+                self.add_server(server)?;
+            }
+        }
+        
+        Ok(())
     }
 } 
