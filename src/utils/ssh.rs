@@ -7,9 +7,8 @@ use std::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs::OpenOptions;
-use std::fs::File;
-
 use crate::models::{AuthType, ServerConfig};
+use crate::utils::handle_rzsz::handle_rzsz;
 use crate::utils::ssh_config::expand_tilde;
 
 // 调试日志函数
@@ -236,7 +235,7 @@ impl SshClient {
                     }
                     
                     // 检测并处理rzsz命令
-                    if let Ok(handled) = crate::utils::handle_rzsz(&stdin_buf[0..read_result as usize], &mut channel) {
+                    if let Ok(handled) = handle_rzsz(&stdin_buf[0..read_result as usize], &mut channel) {
                         if handled {
                             debug_log("rzsz命令已处理")?;
                             continue;

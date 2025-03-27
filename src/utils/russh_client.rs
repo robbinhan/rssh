@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::models::{AuthType, ServerConfig};
 use crate::utils::ssh_config::expand_tilde;
+use crate::utils::terminal_style::{Style, colors, Styled};
 
 // SSH客户端处理程序
 struct Handler {
@@ -53,14 +54,23 @@ impl client::Handler for Handler {
         data: &[u8],
         session: client::Session,
     ) -> Result<(Self, client::Session), Self::Error> {
-        // 接收到数据，打印到标准输出
+        // 接收到数据，使用样式处理后打印到标准输出
         let data_vec = data.to_vec();
         tokio::spawn(async move {
-            if let Err(e) = tokio::io::stdout().write_all(&data_vec).await {
-                eprintln!("写入stdout失败: {}", e);
-            }
-            if let Err(e) = tokio::io::stdout().flush().await {
-                eprintln!("刷新stdout失败: {}", e);
+            // 创建默认样式
+            let style = Style::new()
+                .fg(colors::WHITE)
+                .bold();
+            
+            // 将数据转换为字符串并应用样式
+            if let Ok(text) = String::from_utf8(data_vec) {
+                let styled_text = text.style(style);
+                if let Err(e) = tokio::io::stdout().write_all(styled_text.to_string().as_bytes()).await {
+                    eprintln!("写入stdout失败: {}", e);
+                }
+                if let Err(e) = tokio::io::stdout().flush().await {
+                    eprintln!("刷新stdout失败: {}", e);
+                }
             }
         });
         Ok((self, session))
@@ -73,14 +83,23 @@ impl client::Handler for Handler {
         data: &[u8],
         session: client::Session,
     ) -> Result<(Self, client::Session), Self::Error> {
-        // 接收到扩展数据（通常是stderr），打印到stderr
+        // 接收到扩展数据（通常是stderr），使用红色样式打印到stderr
         let data_vec = data.to_vec();
         tokio::spawn(async move {
-            if let Err(e) = tokio::io::stderr().write_all(&data_vec).await {
-                eprintln!("写入stderr失败: {}", e);
-            }
-            if let Err(e) = tokio::io::stderr().flush().await {
-                eprintln!("刷新stderr失败: {}", e);
+            // 创建错误样式
+            let style = Style::new()
+                .fg(colors::RED)
+                .bold();
+            
+            // 将数据转换为字符串并应用样式
+            if let Ok(text) = String::from_utf8(data_vec) {
+                let styled_text = text.style(style);
+                if let Err(e) = tokio::io::stderr().write_all(styled_text.to_string().as_bytes()).await {
+                    eprintln!("写入stderr失败: {}", e);
+                }
+                if let Err(e) = tokio::io::stderr().flush().await {
+                    eprintln!("刷新stderr失败: {}", e);
+                }
             }
         });
         Ok((self, session))
@@ -91,8 +110,6 @@ impl client::Handler for Handler {
 pub async fn connect_with_russh(server: &ServerConfig) -> Result<()> {
     // 配置客户端
     let config = client::Config {
-        // 配置客户端参数
-        // 注意：根据russh 0.40.1版本的API，没有connection_timeout字段
         ..Default::default()
     };
 
@@ -106,11 +123,14 @@ pub async fn connect_with_russh(server: &ServerConfig) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("无法解析服务器地址"))?;
 
     // 连接到服务器
-    println!("正在使用russh连接到 {}@{}:{}...", 
+    let style = Style::new()
+        .fg(colors::CYAN)
+        .bold();
+    println!("{}", format!("正在使用russh连接到 {}@{}:{}...", 
         server.username, 
         server.host, 
         server.port
-    );
+    ).style(style));
 
     let mut session = client::connect(config, socket_addr, handler).await
         .with_context(|| "无法连接到服务器")?;
@@ -156,7 +176,7 @@ pub async fn connect_with_russh(server: &ServerConfig) -> Result<()> {
     }
 
     // 打开通道
-    let mut channel = session.channel_open_session().await
+    let channel = session.channel_open_session().await
         .with_context(|| "无法打开会话通道")?;
 
     // 设置终端大小
@@ -177,7 +197,10 @@ pub async fn connect_with_russh(server: &ServerConfig) -> Result<()> {
     channel.request_shell(true).await
         .with_context(|| "无法请求shell")?;
 
-    println!("已连接，启动交互式shell...");
+    let style = Style::new()
+        .fg(colors::GREEN)
+        .bold();
+    println!("{}", "已连接，启动交互式shell...".style(style));
 
     // 设置标准输入
     let stdin = tokio::io::stdin();
@@ -206,12 +229,18 @@ pub async fn connect_with_russh(server: &ServerConfig) -> Result<()> {
                     Ok(n) => {
                         // 发送数据到远程
                         if let Err(e) = channel.data(&buffer[0..n]).await {
-                            eprintln!("发送数据失败: {}", e);
+                            let style = Style::new()
+                                .fg(colors::RED)
+                                .bold();
+                            eprintln!("{}", format!("发送数据失败: {}", e).style(style));
                             break;
                         }
                     },
                     Err(e) => {
-                        eprintln!("读取标准输入失败: {}", e);
+                        let style = Style::new()
+                            .fg(colors::RED)
+                            .bold();
+                        eprintln!("{}", format!("读取标准输入失败: {}", e).style(style));
                         break;
                     }
                 }
@@ -224,11 +253,11 @@ pub async fn connect_with_russh(server: &ServerConfig) -> Result<()> {
     }
 
     // 关闭连接
-    let _ = channel.eof().await;
-    let _ = channel.close().await;
-    session.disconnect(russh::Disconnect::ByApplication, "会话结束", "").await?;
+    let style = Style::new()
+        .fg(colors::YELLOW)
+        .bold();
+    println!("{}", "正在关闭连接...".style(style));
 
-    println!("\n连接已关闭");
     Ok(())
 }
 
