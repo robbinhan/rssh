@@ -177,6 +177,20 @@ enum Commands {
         #[arg(short, long)]
         skip_existing: bool,
     },
+    
+    /// 导出服务器配置到目录
+    Export {
+        /// 导出目录路径
+        #[arg(index = 1)]
+        path: PathBuf,
+    },
+
+    /// 从目录导入服务器配置
+    ImportConfig {
+        /// 导入目录路径
+        #[arg(index = 1)]
+        path: PathBuf,
+    },
 }
 
 pub fn run() -> Result<()> {
@@ -300,7 +314,7 @@ pub fn run() -> Result<()> {
             let mut row_idx = 0;
             for server in &filtered_servers {  // 使用引用避免移动所有权
                 // 使用交替的行颜色
-                let row_color = if row_idx % 2 == 0 { "" } else { "" };
+                let _row_color = if row_idx % 2 == 0 { "" } else { "" };
                 row_idx += 1;
                 
                 // 截取ID的前8个字符
@@ -727,6 +741,16 @@ pub fn run() -> Result<()> {
                 imported.to_string().bright_green(), 
                 skipped.to_string().bright_yellow()
             );
+        },
+        
+        Commands::Export { path } => {
+            config_manager.export_config(&path)?;
+            println!("配置已导出到: {}", path.display());
+        },
+
+        Commands::ImportConfig { path } => {
+            config_manager.import_config(&path)?;
+            println!("配置已从 {} 导入", path.display());
         },
     }
     

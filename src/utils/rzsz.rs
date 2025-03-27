@@ -50,7 +50,7 @@ pub fn handle_rzsz(data: &[u8], channel: &mut ssh2::Channel) -> Result<bool> {
 }
 
 /// 处理rz命令（从本地上传文件到远程）
-fn handle_receive_file(channel: &mut ssh2::Channel) -> Result<()> {
+fn handle_receive_file(_channel: &mut ssh2::Channel) -> Result<()> {
     println!("\n检测到rz命令，准备上传文件到远程服务器...");
     
     // 使用文件选择器让用户选择文件
