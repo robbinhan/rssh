@@ -56,6 +56,14 @@ pub struct Style {
     pub strikethrough: bool,
     pub dim: bool,
     pub reverse: bool,
+    pub blink: bool,
+    pub rapid_blink: bool,
+    pub hidden: bool,
+    pub framed: bool,
+    pub encircled: bool,
+    pub overlined: bool,
+    pub superscript: bool,
+    pub subscript: bool,
 }
 
 impl Default for Style {
@@ -69,6 +77,14 @@ impl Default for Style {
             strikethrough: false,
             dim: false,
             reverse: false,
+            blink: false,
+            rapid_blink: false,
+            hidden: false,
+            framed: false,
+            encircled: false,
+            overlined: false,
+            superscript: false,
+            subscript: false,
         }
     }
 }
@@ -124,6 +140,54 @@ impl Style {
     /// 设置反色
     pub fn reverse(mut self) -> Self {
         self.reverse = true;
+        self
+    }
+
+    /// 设置闪烁
+    pub fn blink(mut self) -> Self {
+        self.blink = true;
+        self
+    }
+
+    /// 设置快速闪烁
+    pub fn rapid_blink(mut self) -> Self {
+        self.rapid_blink = true;
+        self
+    }
+
+    /// 设置隐藏
+    pub fn hidden(mut self) -> Self {
+        self.hidden = true;
+        self
+    }
+
+    /// 设置框架
+    pub fn framed(mut self) -> Self {
+        self.framed = true;
+        self
+    }
+
+    /// 设置环绕
+    pub fn encircled(mut self) -> Self {
+        self.encircled = true;
+        self
+    }
+
+    /// 设置上划线
+    pub fn overlined(mut self) -> Self {
+        self.overlined = true;
+        self
+    }
+
+    /// 设置上标
+    pub fn superscript(mut self) -> Self {
+        self.superscript = true;
+        self
+    }
+
+    /// 设置下标
+    pub fn subscript(mut self) -> Self {
+        self.subscript = true;
         self
     }
 
@@ -273,6 +337,14 @@ impl Display for StyledText {
         if self.style.strikethrough { codes.push("9".to_string()); }
         if self.style.dim { codes.push("2".to_string()); }
         if self.style.reverse { codes.push("7".to_string()); }
+        if self.style.blink { codes.push("5".to_string()); }
+        if self.style.rapid_blink { codes.push("6".to_string()); }
+        if self.style.hidden { codes.push("8".to_string()); }
+        if self.style.framed { codes.push("51".to_string()); }
+        if self.style.encircled { codes.push("52".to_string()); }
+        if self.style.overlined { codes.push("53".to_string()); }
+        if self.style.superscript { codes.push("73".to_string()); }
+        if self.style.subscript { codes.push("74".to_string()); }
 
         // 构建ANSI转义序列
         let codes_str = codes.join(";");
