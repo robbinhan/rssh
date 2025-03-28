@@ -280,6 +280,9 @@ rssh connect myserver --mode russh
 2. 如果使用密钥认证，确保密钥文件权限正确（600或400）
 3. 检查`/tmp/rssh_debug.log`调试日志（如果使用`--mode debug`）
 
+## TODO
+[ ] copy命令：从某个服务器的路径拷贝文件或目录到另一个服务器路径上
+
 ## 许可证
 
 MIT
