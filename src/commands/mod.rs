@@ -7,6 +7,7 @@ use uuid::Uuid;
 use colored::*;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use crate::utils::server_info::display_server_info;
 
 #[derive(Parser)]
 #[command(name = "rssh")]
@@ -190,6 +191,12 @@ enum Commands {
         /// 导入目录路径
         #[arg(index = 1)]
         path: PathBuf,
+    },
+
+    /// 查看服务器详细信息
+    Info {
+        /// 服务器名称或ID
+        server: String,
     },
 }
 
@@ -751,6 +758,26 @@ pub fn run() -> Result<()> {
         Commands::ImportConfig { path } => {
             config_manager.import_config(&path)?;
             println!("配置已从 {} 导入", path.display());
+        },
+
+        Commands::Info { server } => {
+            // 首先尝试按ID查找
+            let server_config = config_manager.get_server(&server)?;
+            
+            // 如果按ID找不到，尝试按名称查找
+            let server_config = if server_config.is_none() {
+                let servers = config_manager.list_servers()?;
+                servers.into_iter().find(|s| s.name == server)
+            } else {
+                server_config
+            };
+            
+            let server_config = match server_config {
+                Some(s) => s,
+                None => return Err(anyhow::anyhow!("找不到指定的服务器: {}", server)),
+            };
+            
+            display_server_info(&server_config)?;
         },
     }
     
