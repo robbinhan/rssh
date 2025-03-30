@@ -74,4 +74,15 @@ impl ServerConfig {
             description,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Server {
+    pub name: String,
+    pub host: String,
+    pub username: String,
+    pub port: Option<u16>,
+    pub auth_type: AuthType,
+    pub auth_data: Option<String>,
+    pub group: Option<String>,
 } 

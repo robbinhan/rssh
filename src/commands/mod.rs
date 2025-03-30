@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use crate::models::{AuthType, ServerConfig};
 use crate::config::{ConfigManager, get_db_path};
 use crate::utils::{SshClient, import_ssh_config, connect_via_system_ssh, ssh_command_connect, russh_connect};
+use crate::utils::rclone::RcloneConfig;
 use uuid::Uuid;
 use colored::*;
 use std::io::{self, Write};
@@ -197,6 +198,25 @@ enum Commands {
     Info {
         /// 服务器名称或ID
         server: String,
+    },
+
+    /// 在服务器之间复制文件或目录
+    Copy {
+        /// 源服务器名称
+        #[arg(short, long)]
+        from: String,
+        
+        /// 源服务器上的路径
+        #[arg(short, long)]
+        from_path: String,
+        
+        /// 目标服务器名称
+        #[arg(short, long)]
+        to: String,
+        
+        /// 目标服务器上的路径
+        #[arg(short, long)]
+        to_path: String,
     },
 }
 
@@ -779,6 +799,55 @@ pub fn run() -> Result<()> {
             
             display_server_info(&server_config)?;
         },
+
+        Commands::Copy { from, from_path, to, to_path } => {
+            println!("正在查找服务器配置...");
+            let config = ConfigManager::new(get_db_path()?)?;
+            
+            println!("查找源服务器: {}", from);
+            let from_server = if let Some(server) = config.get_server(&from)? {
+                server
+            } else {
+                // 尝试按名称不区分大小写查找
+                let servers = config.list_servers()?;
+                servers.into_iter()
+                    .find(|s| s.name.to_lowercase() == from.to_lowercase())
+                    .ok_or_else(|| anyhow::anyhow!("源服务器 '{}' 不存在，请使用 'rssh list' 查看可用服务器", from))?
+            };
+            println!("找到源服务器: {} ({})", from_server.name, from_server.host);
+            
+            println!("查找目标服务器: {}", to);
+            let to_server = if let Some(server) = config.get_server(&to)? {
+                server
+            } else {
+                // 尝试按名称不区分大小写查找
+                let servers = config.list_servers()?;
+                servers.into_iter()
+                    .find(|s| s.name.to_lowercase() == to.to_lowercase())
+                    .ok_or_else(|| anyhow::anyhow!("目标服务器 '{}' 不存在，请使用 'rssh list' 查看可用服务器", to))?
+            };
+            println!("找到目标服务器: {} ({})", to_server.name, to_server.host);
+            
+            // 确保 rclone 已安装
+            println!("检查 rclone 是否已安装...");
+            RcloneConfig::ensure_rclone_installed()?;
+            
+            // 初始化 rclone 配置
+            println!("初始化 rclone 配置...");
+            let rclone_config = RcloneConfig::new()?;
+            
+            // 配置源服务器和目标服务器
+            println!("配置源服务器...");
+            rclone_config.configure_remote(&from_server)?;
+            
+            println!("配置目标服务器...");
+            rclone_config.configure_remote(&to_server)?;
+            
+            // 执行复制
+            println!("开始复制文件...");
+            rclone_config.copy(&from_server, &from_path, &to_server, &to_path)?;
+            println!("复制完成！");
+        }
     }
     
     Ok(())
