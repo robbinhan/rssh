@@ -256,6 +256,25 @@ rssh edit myserver
 rssh remove myserver
 ```
 
+### 在服务器之间复制文件
+
+```bash
+# 从源服务器复制文件到目标服务器
+rssh copy --from source_server --from-path /path/to/source/file.txt \
+          --to target_server --to-path /path/to/target/file.txt
+
+# 复制整个目录
+rssh copy --from source_server --from-path /path/to/source/dir \
+          --to target_server --to-path /path/to/target/dir
+```
+
+**注意事项：**
+1. 首次使用时会自动安装和配置 rclone
+2. 支持复制单个文件或整个目录
+3. 使用 rclone 作为底层实现，支持断点续传
+4. 路径可以是相对路径或绝对路径
+5. 如果目标路径已存在同名文件，会被覆盖
+
 ## 配置文件
 
 配置文件存储在以下位置：
@@ -281,7 +300,7 @@ rssh connect myserver --mode russh
 3. 检查`/tmp/rssh_debug.log`调试日志（如果使用`--mode debug`）
 
 ## TODO
-[ ] copy命令：从某个服务器的路径拷贝文件或目录到另一个服务器路径上
+[X] copy命令：从某个服务器的路径拷贝文件或目录到另一个服务器路径上
 
 ## 许可证
 
