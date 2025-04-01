@@ -66,6 +66,12 @@ pub fn connect_via_system_ssh(server: &ServerConfig, use_rzsz: bool, use_kitten:
     args.push("-o".to_string());
     args.push("ServerAliveInterval=60".to_string());
     
+    // 启用ssh-rsa算法支持
+    args.push("-o".to_string());
+    args.push("HostKeyAlgorithms=+ssh-rsa".to_string());
+    args.push("-o".to_string());
+    args.push("PubkeyAcceptedAlgorithms=+ssh-rsa".to_string());
+    
     // 检查是否安装了lrzsz，如果是，则使用我们的rzsz代理
     let rzsz_enabled = is_lrzsz_installed();
     
@@ -260,6 +266,12 @@ pub fn ssh_command_connect(server: &ServerConfig, use_kitten: bool) -> Result<()
         all_args.push("+kitten");
         all_args.push("ssh");
     }
+    
+    // 添加ssh-rsa算法支持
+    all_args.push("-o");
+    all_args.push("HostKeyAlgorithms=+ssh-rsa");
+    all_args.push("-o");
+    all_args.push("PubkeyAcceptedAlgorithms=+ssh-rsa");
     
     // 添加认证相关参数
     match &server.auth_type {
