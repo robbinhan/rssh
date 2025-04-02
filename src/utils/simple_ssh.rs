@@ -40,17 +40,146 @@ pub fn connect_via_system_ssh(server: &ServerConfig, use_rzsz: bool, use_kitten:
     // 添加认证相关参数
     match &server.auth_type {
         AuthType::Key(key_path) => {
+            println!("使用密钥认证，密钥路径: {}", key_path);
             let expanded_path = expand_tilde(key_path);
+            println!("展开后的密钥路径: {}", expanded_path);
             args.push("-i".to_string());
-            args.push(expanded_path);
+            args.push(expanded_path.clone());
+            
+            // 如果同时提供了密码，在密钥认证后尝试密码认证
+            if let Some(password) = &server.password {
+                println!("检测到备用密码，准备使用expect处理密码输入");
+                // 检查是否安装了expect
+                if let Ok(expect_path) = which::which("expect") {
+                    println!("找到expect程序: {}", expect_path.display());
+                    
+                    // 创建expect脚本
+                    let expect_script = format!(
+                        "#!/usr/bin/expect -f\n\
+                         set timeout 30\n\
+                         puts \"开始SSH连接...\"\n\
+                         spawn {} -i {} -p {} {}@{} -o StrictHostKeyChecking=no -o HashKnownHosts=no -o ServerAliveInterval=60 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa\n\
+                         puts \"等待密码提示...\"\n\
+                         expect {{\n\
+                             -re \"password:\" {{\n\
+                                 puts \"检测到密码提示\"\n\
+                                 puts \"准备发送密码\"\n\
+                                 send \"{}\\\r\"\n\
+                                 puts \"密码已发送，等待Opt>提示\"\n\
+                                 exp_continue\n\
+                             }}\n\
+                             -re \"Opt>\" {{\n\
+                                 puts \"检测到Opt>提示，进入交互模式\"\n\
+                                 interact\n\
+                             }}\n\
+                             timeout {{\n\
+                                 puts \"超时，未检测到Opt>提示\"\n\
+                                 exit 1\n\
+                             }}\n\
+                         }}",
+                        ssh_path.display(), expanded_path, server.port, server.username, server.host, password
+                    );
+                    
+                    println!("生成的expect脚本:\n{}", expect_script);
+                    
+                    // 创建临时脚本文件
+                    let temp_dir = std::env::temp_dir();
+                    let script_path = temp_dir.join(format!("rssh_expect_{}.sh", std::process::id()));
+                    println!("创建临时脚本文件: {}", script_path.display());
+                    std::fs::write(&script_path, expect_script)
+                        .with_context(|| "无法创建expect脚本")?;
+                    
+                    // 设置脚本权限
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700))
+                            .with_context(|| "无法设置脚本权限")?;
+                        println!("设置脚本权限为700");
+                    }
+                    
+                    println!("开始执行expect脚本...");
+                    // 执行expect脚本
+                    let mut child = Command::new(expect_path)
+                        .arg(&script_path)
+                        .stdin(Stdio::inherit())
+                        .stdout(Stdio::inherit())
+                        .stderr(Stdio::inherit())
+                        .spawn()
+                        .with_context(|| "无法启动expect进程")?;
+                    
+                    // 不等待子进程结束，直接退出
+                    std::process::exit(0);
+                } else {
+                    println!("未找到expect程序，将使用普通SSH连接");
+                }
+            } else {
+                println!("未设置备用密码，将只使用密钥认证");
+            }
         },
         AuthType::Agent => {
             // 默认使用SSH代理，不需要额外参数
         },
-        AuthType::Password(_) => {
-            // 系统ssh命令不能直接传递密码，这只是作为备用方案
-            println!("警告: 使用系统SSH命令时不支持密码验证，请使用密钥或代理方式。");
-            return Err(anyhow::anyhow!("系统SSH不支持密码验证"));
+        AuthType::Password(password) => {
+            // 检查是否安装了expect
+            if let Ok(expect_path) = which::which("expect") {
+                println!("使用expect自动处理密码输入...");
+                
+                // 创建expect脚本
+                let expect_script = format!(
+                    "#!/usr/bin/expect -f\n\
+                     spawn {} -p {} {}@{} -o StrictHostKeyChecking=no -o HashKnownHosts=no -o ServerAliveInterval=60 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa\n\
+                     expect \"password:\"\n\
+                     send \"{}\\\r\"\n\
+                     interact",
+                    ssh_path.display(), server.port, server.username, server.host, password
+                );
+                
+                // 创建临时脚本文件
+                let temp_dir = std::env::temp_dir();
+                let script_path = temp_dir.join(format!("rssh_expect_{}.sh", std::process::id()));
+                std::fs::write(&script_path, expect_script)
+                    .with_context(|| "无法创建expect脚本")?;
+                
+                // 设置脚本权限
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700))
+                        .with_context(|| "无法设置脚本权限")?;
+                }
+                
+                // 执行expect脚本
+                let status = Command::new(expect_path)
+                    .arg(&script_path)
+                    .stdin(Stdio::inherit())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+                    .with_context(|| "无法启动expect进程")?
+                    .wait()
+                    .with_context(|| "等待expect进程失败")?;
+                
+                // 清理临时文件
+                let _ = std::fs::remove_file(&script_path);
+                
+                if !status.success() {
+                    if let Some(code) = status.code() {
+                        return Err(anyhow::anyhow!("expect进程退出，代码: {}", code));
+                    } else {
+                        return Err(anyhow::anyhow!("expect进程被信号中断"));
+                    }
+                }
+                
+                return Ok(());
+            } else {
+                println!("警告: 未安装expect，无法自动处理密码输入。");
+                println!("请安装expect或使用密钥认证：");
+                println!("  macOS: brew install expect");
+                println!("  Ubuntu/Debian: sudo apt-get install expect");
+                println!("  CentOS/RHEL: sudo yum install expect");
+                return Err(anyhow::anyhow!("未安装expect"));
+            }
         }
     }
     
@@ -284,7 +413,7 @@ pub fn ssh_command_connect(server: &ServerConfig, use_kitten: bool) -> Result<()
         AuthType::Agent => {
             all_args.push(&host_str);
         },
-        AuthType::Password(_) => {
+        AuthType::Password(password) => {
             println!("警告: 系统SSH命令不支持直接传递密码，请使用其他验证方式。");
             return Err(anyhow::anyhow!("不支持密码验证"));
         }

@@ -76,6 +76,10 @@ enum Commands {
         #[arg(short = 'k', long = "auth-data")]
         auth_data: Option<String>,
         
+        /// 备用密码（当密钥认证失败时使用）
+        #[arg(short = 'p', long = "password")]
+        password: Option<String>,
+        
         /// 服务器分组
         #[arg(short, long)]
         group: Option<String>,
@@ -225,32 +229,21 @@ pub fn run() -> Result<()> {
     let config_manager = ConfigManager::new(get_db_path()?)?;
     
     match cli.command {
-        Commands::Add { name, host, port, username, auth_type, auth_data, group, description } => {
+        Commands::Add { name, host, port, username, auth_type, auth_data, password, group, description } => {
             let auth = match auth_type.as_str() {
                 "password" => {
-                    let password = auth_data.unwrap_or_else(|| {
-                        print!("请输入密码: ");
-                        io::stdout().flush().unwrap();
-                        rpassword::read_password().unwrap_or_default()
-                    });
-                    AuthType::Password(password)
+                    let pwd = auth_data.ok_or_else(|| anyhow::anyhow!("使用密码认证时必须提供密码"))?;
+                    AuthType::Password(pwd)
                 },
                 "key" => {
-                    let key_path = auth_data.unwrap_or_else(|| {
-                        print!("请输入私钥路径: ");
-                        io::stdout().flush().unwrap();
-                        let mut path = String::new();
-                        io::stdin().read_line(&mut path).unwrap();
-                        path.trim().to_string()
-                    });
-                    let expanded_path = crate::utils::ssh_config::expand_tilde(&key_path);
-                    AuthType::Key(expanded_path)
+                    let key_path = auth_data.ok_or_else(|| anyhow::anyhow!("使用密钥认证时必须提供密钥路径"))?;
+                    AuthType::Key(key_path)
                 },
                 "agent" => AuthType::Agent,
                 _ => return Err(anyhow::anyhow!("未知的认证类型: {}", auth_type)),
             };
             
-            let server = ServerConfig::new(
+            let mut server = ServerConfig::new(
                 Uuid::new_v4().to_string(),
                 name,
                 host,
@@ -259,6 +252,7 @@ pub fn run() -> Result<()> {
                 auth,
                 group,
                 description,
+                password,
             );
             
             config_manager.add_server(server)?;
@@ -578,9 +572,26 @@ pub fn run() -> Result<()> {
                         io::stdin().read_line(&mut input)?;
                         let expanded_path = crate::utils::ssh_config::expand_tilde(input.trim());
                         server_config.auth_type = AuthType::Key(expanded_path);
+                        
+                        // 询问是否设置备用密码
+                        print!("是否设置备用密码？[y/N] ");
+                        io::stdout().flush()?;
+                        input.clear();
+                        io::stdin().read_line(&mut input)?;
+                        if input.trim().to_lowercase() == "y" {
+                            print!("备用密码: ");
+                            io::stdout().flush()?;
+                            let password = rpassword::read_password()?;
+                            if !password.is_empty() {
+                                server_config.password = Some(password);
+                            }
+                        } else {
+                            server_config.password = None;
+                        }
                     },
                     "agent" => {
                         server_config.auth_type = AuthType::Agent;
+                        server_config.password = None;
                     },
                     _ => println!("未知认证类型，保持不变"),
                 }

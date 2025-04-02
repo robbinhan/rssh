@@ -47,6 +47,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub username: String,
     pub auth_type: AuthType,
+    pub password: Option<String>,
     pub group: Option<String>,
     pub description: Option<String>,
 }
@@ -62,6 +63,7 @@ impl ServerConfig {
         auth_type: AuthType,
         group: Option<String>,
         description: Option<String>,
+        password: Option<String>,
     ) -> Self {
         ServerConfig {
             id,
@@ -70,6 +72,7 @@ impl ServerConfig {
             port,
             username,
             auth_type,
+            password,
             group,
             description,
         }

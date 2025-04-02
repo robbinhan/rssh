@@ -73,6 +73,7 @@ impl SshConfigEntry {
             auth_type,
             None,
             None,
+            None,
         ))
     }
 }

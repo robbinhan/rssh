@@ -31,20 +31,36 @@ impl ConfigManager {
     }
     
     fn init_database(conn: &Connection) -> Result<()> {
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS servers (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                host TEXT NOT NULL,
-                port INTEGER NOT NULL,
-                username TEXT NOT NULL,
-                auth_type TEXT NOT NULL,
-                auth_data TEXT,
-                group_name TEXT,
-                description TEXT
-            )",
-            [],
-        )?;
+        // 检查表是否存在
+        let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='servers'")?;
+        let table_exists = stmt.exists([])?;
+        
+        if !table_exists {
+            // 如果表不存在，创建新表
+            conn.execute(
+                "CREATE TABLE servers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    username TEXT NOT NULL,
+                    auth_type TEXT NOT NULL,
+                    auth_data TEXT,
+                    password TEXT,
+                    group_name TEXT,
+                    description TEXT
+                )",
+                [],
+            )?;
+        } else {
+            // 如果表存在，检查是否需要添加 password 列
+            let mut stmt = conn.prepare("SELECT name FROM pragma_table_info('servers') WHERE name = 'password'")?;
+            let has_password = stmt.exists([])?;
+            
+            if !has_password {
+                conn.execute("ALTER TABLE servers ADD COLUMN password TEXT", [])?;
+            }
+        }
         
         Ok(())
     }
@@ -59,8 +75,8 @@ impl ConfigManager {
         };
         
         conn.execute(
-            "INSERT INTO servers (id, name, host, port, username, auth_type, auth_data, group_name, description)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO servers (id, name, host, port, username, auth_type, auth_data, password, group_name, description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 server.id,
                 server.name,
@@ -69,6 +85,7 @@ impl ConfigManager {
                 server.username,
                 auth_type,
                 auth_data,
+                server.password,
                 server.group,
                 server.description,
             ],
@@ -81,13 +98,14 @@ impl ConfigManager {
         let conn = self.conn.lock().unwrap();
         
         let mut stmt = conn.prepare(
-            "SELECT id, name, host, port, username, auth_type, auth_data, group_name, description
+            "SELECT id, name, host, port, username, auth_type, auth_data, password, group_name, description
              FROM servers WHERE id = ?1"
         )?;
         
         let server = stmt.query_row(params![id], |row| {
             let auth_type: String = row.get(5)?;
             let auth_data: Option<String> = row.get(6)?;
+            let password: Option<String> = row.get(7)?;
             
             let auth = match (auth_type.as_str(), auth_data) {
                 ("password", Some(pwd)) => AuthType::Password(pwd),
@@ -103,8 +121,9 @@ impl ConfigManager {
                 port: row.get(3)?,
                 username: row.get(4)?,
                 auth_type: auth,
-                group: row.get(7)?,
-                description: row.get(8)?,
+                password,
+                group: row.get(8)?,
+                description: row.get(9)?,
             })
         });
         
@@ -119,13 +138,14 @@ impl ConfigManager {
         let conn = self.conn.lock().unwrap();
         
         let mut stmt = conn.prepare(
-            "SELECT id, name, host, port, username, auth_type, auth_data, group_name, description
+            "SELECT id, name, host, port, username, auth_type, auth_data, password, group_name, description
              FROM servers ORDER BY name"
         )?;
         
         let servers_iter = stmt.query_map([], |row| {
             let auth_type: String = row.get(5)?;
             let auth_data: Option<String> = row.get(6)?;
+            let password: Option<String> = row.get(7)?;
             
             let auth = match (auth_type.as_str(), auth_data) {
                 ("password", Some(pwd)) => AuthType::Password(pwd),
@@ -141,8 +161,9 @@ impl ConfigManager {
                 port: row.get(3)?,
                 username: row.get(4)?,
                 auth_type: auth,
-                group: row.get(7)?,
-                description: row.get(8)?,
+                password,
+                group: row.get(8)?,
+                description: row.get(9)?,
             })
         })?;
         
@@ -174,7 +195,7 @@ impl ConfigManager {
         let count = conn.execute(
             "UPDATE servers 
              SET name = ?2, host = ?3, port = ?4, username = ?5, 
-                 auth_type = ?6, auth_data = ?7, group_name = ?8, description = ?9
+                 auth_type = ?6, auth_data = ?7, password = ?8, group_name = ?9, description = ?10
              WHERE id = ?1",
             params![
                 server.id,
@@ -184,6 +205,7 @@ impl ConfigManager {
                 server.username,
                 auth_type,
                 auth_data,
+                server.password,
                 server.group,
                 server.description,
             ],
