@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::utils::terminal_style::{Style, colors, Styled, StyledText};
+use crate::utils::terminal_style::{Style, Styled, StyledText};
 
 /// 认证类型
 #[derive(Debug, Clone, Serialize, Deserialize)]

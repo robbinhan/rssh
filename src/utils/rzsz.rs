@@ -1,13 +1,7 @@
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::io::{self, Write, Read};
-use std::fs::File;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-use colored::*;
+use std::io::{self, Write};
 
 /// RZSZ特征标识
 const ZMODEM_DETECT: &[u8] = b"**\x18B00000000000000\r\n";
