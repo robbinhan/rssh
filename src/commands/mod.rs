@@ -243,7 +243,7 @@ pub fn run() -> Result<()> {
                 _ => return Err(anyhow::anyhow!("未知的认证类型: {}", auth_type)),
             };
             
-            let mut server = ServerConfig::new(
+            let server = ServerConfig::new(
                 Uuid::new_v4().to_string(),
                 name,
                 host,

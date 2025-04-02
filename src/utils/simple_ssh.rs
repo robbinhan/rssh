@@ -55,29 +55,34 @@ pub fn connect_via_system_ssh(server: &ServerConfig, use_rzsz: bool, use_kitten:
                     
                     // 创建expect脚本
                     let expect_script = format!(
-                        "#!/usr/bin/expect -f\n\
-                         set timeout 30\n\
-                         puts \"开始SSH连接...\"\n\
-                         spawn {} -i {} -p {} {}@{} -o StrictHostKeyChecking=no -o HashKnownHosts=no -o ServerAliveInterval=60 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa\n\
-                         puts \"等待密码提示...\"\n\
-                         expect {{\n\
-                             -re \"password:\" {{\n\
-                                 puts \"检测到密码提示\"\n\
-                                 puts \"准备发送密码\"\n\
-                                 send \"{}\\\r\"\n\
-                                 puts \"密码已发送，等待Opt>提示\"\n\
-                                 exp_continue\n\
-                             }}\n\
-                             -re \"Opt>\" {{\n\
-                                 puts \"检测到Opt>提示，进入交互模式\"\n\
-                                 interact\n\
-                             }}\n\
-                             timeout {{\n\
-                                 puts \"超时，未检测到Opt>提示\"\n\
-                                 exit 1\n\
-                             }}\n\
-                         }}",
-                        ssh_path.display(), expanded_path, server.port, server.username, server.host, password
+                        r#"#!/usr/bin/expect -f
+set timeout 30
+puts "开始SSH连接..."
+spawn {} -i {} -p {} {}@{} -o StrictHostKeyChecking=no -o HashKnownHosts=no -o ServerAliveInterval=60 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa
+puts "等待密码提示..."
+expect {{
+    -re "password:" {{
+        puts "检测到密码提示"
+        puts "准备发送密码"
+        send "{}\r"
+        puts "密码已发送，等待Opt>提示"
+        exp_continue
+    }}
+    -re "Opt>" {{
+        puts "检测到Opt>提示，进入交互模式"
+        interact
+    }}
+    timeout {{
+        puts "超时，未检测到Opt>提示"
+        exit 1
+    }}
+}}"#,
+                        ssh_path.display(), 
+                        expanded_path, 
+                        server.port, 
+                        server.username, 
+                        server.host, 
+                        password.replace("\"", "\\\"").replace("\\", "\\\\")
                     );
                     
                     println!("生成的expect脚本:\n{}", expect_script);
@@ -100,16 +105,37 @@ pub fn connect_via_system_ssh(server: &ServerConfig, use_rzsz: bool, use_kitten:
                     
                     println!("开始执行expect脚本...");
                     // 执行expect脚本
-                    let mut child = Command::new(expect_path)
-                        .arg(&script_path)
-                        .stdin(Stdio::inherit())
-                        .stdout(Stdio::inherit())
-                        .stderr(Stdio::inherit())
-                        .spawn()
-                        .with_context(|| "无法启动expect进程")?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::CommandExt;
+                        let error = Command::new(expect_path)
+                            .arg(&script_path)
+                            .exec();
+                        return Err(anyhow::anyhow!("执行expect脚本失败: {}", error));
+                    }
                     
-                    // 不等待子进程结束，直接退出
-                    std::process::exit(0);
+                    #[cfg(not(unix))]
+                    {
+                        let child = Command::new(expect_path)
+                            .arg(&script_path)
+                            .stdin(Stdio::inherit())
+                            .stdout(Stdio::inherit())
+                            .stderr(Stdio::inherit())
+                            .spawn()
+                            .with_context(|| "无法启动expect进程")?;
+                        
+                        // 等待子进程结束
+                        let status = child.wait()
+                            .with_context(|| "等待expect进程失败")?;
+                        
+                        if !status.success() {
+                            if let Some(code) = status.code() {
+                                return Err(anyhow::anyhow!("expect进程退出，代码: {}", code));
+                            } else {
+                                return Err(anyhow::anyhow!("expect进程被信号中断"));
+                            }
+                        }
+                    }
                 } else {
                     println!("未找到expect程序，将使用普通SSH连接");
                 }
@@ -132,7 +158,7 @@ pub fn connect_via_system_ssh(server: &ServerConfig, use_rzsz: bool, use_kitten:
                      expect \"password:\"\n\
                      send \"{}\\\r\"\n\
                      interact",
-                    ssh_path.display(), server.port, server.username, server.host, password
+                    ssh_path.display(), server.port, server.username, server.host, password.replace("\"", "\\\"").replace("\\", "\\\\")
                 );
                 
                 // 创建临时脚本文件

@@ -4,8 +4,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 use std::fs;
-use std::fs::File;
-use std::io::Write;
 
 use crate::models::{AuthType, ServerConfig};
 use crate::utils::ssh_config::expand_tilde;
