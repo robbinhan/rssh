@@ -205,9 +205,9 @@ rssh copy --from source_server --from-path /path/to/source/dir \
 - Windows: `C:\Users\<用户名>\AppData\Roaming\rssh\servers.db`
 
 ## TODO
-[X] copy命令：从某个服务器的路径拷贝文件或目录到另一个服务器路径上
-[ ] connect group: 连接一组服务器，分屏展示（需要kitty终端支持）
-[ ] session: 可以支持根据配置以多个窗口连接服务器，同时执行命令（类似tmux的session）
+- [X] copy命令：从某个服务器的路径拷贝文件或目录到另一个服务器路径上
+- [ ] connect group: 连接一组服务器，分屏展示（需要kitty终端支持）
+- [ ] session: 可以支持根据配置以多个窗口连接服务器，同时执行命令（类似tmux的session）
 
 ## 许可证
 
