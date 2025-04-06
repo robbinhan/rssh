@@ -96,27 +96,10 @@ RSSH支持多种连接模式，以适应不同环境和需求：
 # 默认使用内置SSH库
 rssh connect myserver
 
-# 使用系统SSH命令（推荐方式，最稳定可靠）
-rssh connect myserver --mode system
-
-# 使用exec直接替换当前进程（也很稳定）
-rssh connect myserver --mode exec
-
-# 使用调试模式（将记录详细日志到/tmp/rssh_debug.log）
-rssh connect myserver --mode debug
-
-# 使用russh库连接（基于异步Rust的SSH实现）
+# 使用russh库连接（基于异步Rust的SSH实现**实验中**）
 rssh connect myserver --mode russh
 ```
 
-**推荐的连接模式**:
-1. `system` - 使用系统的SSH命令，提供最佳兼容性和最稳定的交互体验
-2. `exec` - 也使用系统的SSH命令，但直接替换当前进程
-3. `russh` - 使用异步Rust的SSH库，可能在某些环境下有更好的性能
-4. `library` - 使用内置的SSH2库（默认模式）
-5. `debug` - 用于调试的内置库模式
-
-调试模式下，你可以按`Alt+D`开启/关闭键盘输入的调试信息。
 
 ### 在服务器上执行命令
 
@@ -124,67 +107,6 @@ rssh connect myserver --mode russh
 rssh connect myserver --command "ls -la"
 ```
 
-### 在连接状态下使用rzsz传输文件
-
-rssh支持在连接到服务器后直接使用rz和sz命令传输文件，支持两种模式：
-
-1. **使用内置的rzsz代理服务** (推荐模式)：
-   ```bash
-   # 使用--rzsz参数启用rzsz代理功能
-   rssh connect myserver --mode system --rzsz
-   ```
-
-2. **使用默认的SSH库模式**：
-   ```bash
-   # 使用library模式，不需要额外参数
-   rssh connect myserver --mode library
-   ```
-
-连接后，在远程服务器上：
-```bash
-# 下载文件：在远程服务器上执行，将弹出本地保存对话框
-sz filename.txt  # 将远程文件下载到本地
-
-# 上传文件：在远程服务器上执行，将弹出本地文件选择对话框
-rz  # 将本地文件上传到远程服务器
-```
-
-**注意事项:**
-1. 使用rzsz功能需要在本地和远程服务器上都安装`lrzsz`包
-2. 本地安装方法：
-   - MacOS: `brew install lrzsz`
-   - Ubuntu/Debian: `sudo apt-get install lrzsz`
-   - CentOS/RHEL: `sudo yum install lrzsz`
-3. 远程服务器安装方法：
-   - Ubuntu/Debian: `sudo apt-get install lrzsz`
-   - CentOS/RHEL: `sudo yum install lrzsz`
-4. 上传/下载时可能会出现乱码，这是正常现象，代表文件正在传输
-5. 文件传输完成会显示成功或失败信息
-
-**兼容性问题：**
-由于ZMODEM协议需要特定的终端环境支持，在以下情况下可能不工作：
-1. 某些终端模拟器不完全支持ZMODEM协议
-2. 文件较大时可能会超时
-3. 本地与远程的lrzsz版本不兼容
-
-如果遇到rzsz传输问题，建议使用rssh的专用上传下载命令：
-```bash
-# 上传本地文件到远程服务器
-rssh upload myserver local_file.txt /path/on/remote/server/
-
-# 从远程服务器下载文件到本地
-rssh download myserver /path/on/remote/server/file.txt local_file.txt
-```
-
-**高级调试:**
-如果遇到传输问题，可以查看以下日志文件：
-- `/tmp/rz_debug.log` - 下载日志
-- `/tmp/sz_debug.log` - 上传日志
-
-支持的平台:
-- MacOS (使用AppleScript弹出文件选择对话框)
-- Linux (使用zenity弹出文件选择对话框，需要安装zenity)
-- 其他平台将使用命令行方式进行文件选择
 
 ### 上传文件到服务器
 
@@ -279,28 +201,13 @@ rssh copy --from source_server --from-path /path/to/source/dir \
 
 配置文件存储在以下位置：
 
-- Linux/macOS: `~/.config/rssh/servers.db`
+- Linux/macOS: `~/.config/rssh/servers.db` 或者 `~/Library/Application\ Support/`
 - Windows: `C:\Users\<用户名>\AppData\Roaming\rssh\servers.db`
-
-## 问题排查
-
-如果你遇到交互式Shell问题，请尝试不同的连接模式：
-
-```bash
-# 最可靠的方式
-rssh connect myserver --mode system
-
-# 如果你想尝试现代的异步Rust实现
-rssh connect myserver --mode russh
-```
-
-其他排查提示：
-1. 确认你的终端环境支持PTY和原始模式
-2. 如果使用密钥认证，确保密钥文件权限正确（600或400）
-3. 检查`/tmp/rssh_debug.log`调试日志（如果使用`--mode debug`）
 
 ## TODO
 [X] copy命令：从某个服务器的路径拷贝文件或目录到另一个服务器路径上
+[ ] connect group: 连接一组服务器，分屏展示（需要kitty终端支持）
+[ ] session: 可以支持根据配置以多个窗口连接服务器，同时执行命令（类似tmux的session）
 
 ## 许可证
 
