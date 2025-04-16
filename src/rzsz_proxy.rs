@@ -338,7 +338,7 @@ fn start_zmodem_upload(file_path: &str) -> io::Result<()> {
             echo "3. 本地lrzsz版本与远程不兼容"
             echo ""
             echo "尝试使用直接的命令进行文件传输:"
-            echo "rssh upload v100 {} /path/to/remote/dir/"
+            echo "rssh upload remote_host {} /path/to/remote/dir/"
         fi
     "#, file_path, file_path, file_path);
     
@@ -394,7 +394,7 @@ fn start_zmodem_download() -> io::Result<()> {
             echo "3. 本地lrzsz版本与远程不兼容"
             echo ""
             echo "尝试使用直接的命令进行文件传输:"
-            echo "rssh download v100 /path/to/remote/file local_file"
+            echo "rssh download remote_host /path/to/remote/file local_file"
         fi
     "#;
     
