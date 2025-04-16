@@ -121,9 +121,6 @@ rssh upload myserver local_file.txt /path/to/remote_file.txt
 # 使用SFTP传输
 rssh upload myserver local_file.txt --mode sftp
 
-# 使用Kitty传输协议（如果您使用的是Kitty终端）
-rssh upload myserver local_file.txt --mode kitty
-
 # 自动选择最佳传输方式（默认）
 rssh upload myserver local_file.txt --mode auto
 ```
@@ -235,11 +232,11 @@ rssh session-start my_session
 # 强制使用tmux
 rssh session-start my_session --tmux
 
-# 强制使用kitty布局（需要在kitty终端中，并启用远程控制）
+# 强制使用kitty会话（需要kitty终端，使用内置的session功能）
 rssh session-start my_session --kitty
 ```
 
-**注意：** 使用kitty终端需要在`~/.config/kitty/kitty.conf`中添加`allow_remote_control yes`并重启kitty终端。
+**注意：** 使用kitty终端不再需要启用远程控制，现在使用的是kitty的原生session功能，能更稳定地管理多窗口布局。
 
 #### 删除会话
 

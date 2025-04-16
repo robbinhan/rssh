@@ -14,24 +14,30 @@ pub fn upload_via_kitty<P: AsRef<Path>>(
         return Err(anyhow::anyhow!("本地文件不存在: {}", local_path.display()));
     }
     
-    // 构建Kitty传输命令
-    let mut args = vec!["kitten", "transfer"];
+    // 确定远程目标路径
+    let remote_dest = match remote_path {
+        Some(path) => path,
+        // 如果没有指定远程路径，使用本地文件名
+        None => local_path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| anyhow::anyhow!("无法从本地路径获取文件名: {}", local_path.display()))?
+    };
+
+    // 构建Kitty传输命令 (修正后的语法)
+    let mut args = vec!["transfer", "-d", "upload"];
     
-    // 如果指定了远程路径，添加--dest参数
-    if let Some(ref path) = remote_path {
-        args.push("--dest");
-        args.push(path);
-    }
-    
-    // 添加文件路径
-    args.push(local_path.to_str().unwrap_or(""));
+    // 添加本地文件路径
+    args.push(local_path.to_str().ok_or_else(|| anyhow::anyhow!("本地路径包含无效UTF-8"))?);
+
+    // 添加远程路径
+    args.push(&remote_dest);
     
     // 输出信息
     println!("使用Kitty传输文件...");
-    println!("命令: kitty {}", args.join(" "));
+    println!("命令: kitten {}", args.join(" "));
     
     // 执行命令
-    let status = Command::new("kitty")
+    let status = Command::new("kitten")
         .args(&args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())

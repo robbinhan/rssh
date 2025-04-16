@@ -368,16 +368,16 @@ pub fn upload_file_auto<P: AsRef<Path>>(
     local_path: P,
     remote_path: Option<String>,
 ) -> Result<()> {
-    // 如果是Kitty终端，优先使用Kitty传输
-    if crate::utils::kitty_transfer::is_kitty_available() {
-        println!("检测到Kitty终端，使用Kitty传输协议");
-        upload_file_kitty(server, local_path, remote_path)
-    } 
-    // 否则使用SCP（通常是最可靠的方式）
-    else {
+    // // 如果是Kitty终端，优先使用Kitty传输
+    // if crate::utils::kitty_transfer::is_kitty_available() {
+    //     println!("检测到Kitty终端，使用Kitty传输协议");
+    //     upload_file_kitty(server, local_path, remote_path)
+    // } 
+    // // 否则使用SCP（通常是最可靠的方式）
+    // else {
         println!("使用SCP传输文件");
         upload_file(server, local_path, remote_path)
-    }
+    // }
 }
 
 /// 自动选择最佳传输方式下载文件

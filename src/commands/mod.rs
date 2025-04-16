@@ -10,6 +10,9 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use crate::utils::server_info::display_server_info;
+use shell_escape; // Import the new crate
+use std::process::Command; // Import Command
+use std::process::Stdio; // Import Stdio
 
 #[derive(Parser)]
 #[command(name = "rssh")]
@@ -43,8 +46,8 @@ pub enum TransferMode {
     Scp,
     /// 使用SFTP传输文件
     Sftp,
-    /// 使用Kitty传输协议（如果可用）
-    Kitty,
+    // /// 使用Kitty传输协议（如果可用）
+    // Kitty,
     /// 自动选择最佳传输方式
     Auto,
 }
@@ -719,10 +722,10 @@ pub fn run() -> Result<()> {
                     // 使用SFTP作为备选方案
                     crate::utils::upload_file_sftp(&server_config, &local_path, remote_path)?;
                 },
-                TransferMode::Kitty => {
-                    // 使用Kitty作为备选方案
-                    crate::utils::upload_file_kitty(&server_config, &local_path, remote_path)?;
-                },
+                // TransferMode::Kitty => {
+                //     // 使用Kitty作为备选方案
+                //     crate::utils::upload_file_kitty(&server_config, &local_path, remote_path)?;
+                // },
                 TransferMode::Auto => {
                     // 自动选择最佳传输方式
                     crate::utils::upload_file_auto(&server_config, &local_path, remote_path)?;
@@ -763,10 +766,10 @@ pub fn run() -> Result<()> {
                     // 使用SFTP作为备选方案
                     crate::utils::download_file_sftp(&server_config, &remote_path, local_path)?;
                 },
-                TransferMode::Kitty => {
-                    // 使用Kitty作为备选方案
-                    crate::utils::download_file_kitty(&server_config, &remote_path, local_path)?;
-                },
+                // TransferMode::Kitty => {
+                //     // 使用Kitty作为备选方案
+                //     crate::utils::download_file_kitty(&server_config, &remote_path, local_path)?;
+                // },
                 TransferMode::Auto => {
                     // 自动选择最佳传输方式
                     crate::utils::download_file_auto(&server_config, &remote_path, local_path)?;
@@ -1150,21 +1153,19 @@ pub fn run() -> Result<()> {
                 }
             };
             
-            // 检查窗口配置
             if session_config.windows.is_empty() {
                 return Err(anyhow::anyhow!("会话 '{}' 没有配置窗口", session_config.name));
             }
             
             // 根据环境选择会话启动方式
             if kitty || (std::env::var("TERM").unwrap_or_default().contains("kitty") && !tmux) {
-                // 使用kitty终端的布局
+                // Restore calling the original function
                 start_session_with_kitty(&config_manager, &session_config)?;
             } else if tmux || std::env::var("TMUX").is_ok() {
-                // 使用tmux
                 start_session_with_tmux(&config_manager, &session_config)?;
             } else {
-                // 默认行为：按顺序连接到每个窗口
-                println!("警告: 未检测到支持多窗口的环境，将按顺序连接");
+                // ... (Keep default sequential connection logic) ...
+                 println!("警告: 未检测到支持多窗口的环境，将按顺序连接");
                 
                 for window in &session_config.windows {
                     // 查找服务器配置
@@ -1208,103 +1209,168 @@ fn find_server(config_manager: &ConfigManager, server_id_or_name: &str) -> Resul
     server_config.ok_or_else(|| anyhow::anyhow!("未找到服务器: {}", server_id_or_name))
 }
 
-/// 使用kitty终端的布局功能启动会话
+/// 使用kitty终端的布局功能启动会话 (最终版本)
 fn start_session_with_kitty(config_manager: &ConfigManager, session: &SessionConfig) -> Result<()> {
-    // 检查是否在kitty终端中
     if !std::env::var("TERM").unwrap_or_default().contains("kitty") {
+        // Keep this check
         return Err(anyhow::anyhow!("当前终端不是kitty"));
     }
     
     println!("使用kitty启动会话: {}", session.name.bright_green());
     
-    // 创建临时脚本文件
-    let mut tmp_file = std::env::temp_dir();
-    tmp_file.push(format!("rssh_session_{}.sh", session.id));
+    // --- Step 1: Generate the kitty session config file (.conf) --- 
+    let mut tmp_session_file = std::env::temp_dir();
+    tmp_session_file.push(format!("rssh_kitty_session_{}.conf", session.id));
+    let mut session_conf_writer = std::io::BufWriter::new(std::fs::File::create(&tmp_session_file)?);
     
-    let mut script = std::fs::File::create(&tmp_file)?;
-    writeln!(script, "#!/bin/sh")?;
+    writeln!(session_conf_writer, "# RSSH会话配置: {}", session.name)?;
+    writeln!(session_conf_writer, "new_tab {}", session.name)?;
+    writeln!(session_conf_writer, "layout splits")?;
+    writeln!(session_conf_writer)?;
     
-    // 启用远程控制 - 使用正确的kitty远程控制命令
-    writeln!(script, "# 先检查是否已启用远程控制")?;
-    writeln!(script, "kitty @ ls > /dev/null 2>&1")?;
-    writeln!(script, "if [ $? -ne 0 ]; then")?;
-    writeln!(script, "  echo \"警告: kitty远程控制未启用，请在~/.config/kitty/kitty.conf中添加'allow_remote_control yes'并重启kitty\"")?;
-    writeln!(script, "  echo \"尝试继续执行...\"")?;
-    writeln!(script, "fi")?;
-    
-    // 对于每个窗口，创建相应的kitty命令
+    let current_rssh_path = std::env::current_exe()
+        .with_context(|| "无法获取当前rssh可执行文件路径")?;
+
     for (i, window) in session.windows.iter().enumerate() {
-        // 查找服务器配置
         let server_config = find_server(config_manager, &window.server)?;
-        
-        // 创建SSH命令
-        let mut ssh_cmd = format!("ssh {}@{} -p {}", 
-            server_config.username, 
-            server_config.host, 
-            server_config.port);
-        
-        // 添加认证参数
+        let title = window.title.as_deref().unwrap_or(&window.server);
+        let window_var = format!("window={}", i);
+
+        let mut base_ssh_args = format!("{}@{} -p {}", 
+            server_config.username, server_config.host, server_config.port);
         if let Some(key_path) = server_config.auth_type.get_key_path() {
-            ssh_cmd.push_str(&format!(" -i {}", key_path));
+            let expanded_key_path = crate::utils::ssh_config::expand_tilde(key_path);
+            base_ssh_args.push_str(&format!(" -i \"{}\"", expanded_key_path)); 
         }
-        
-        // 添加命令（如果有）
-        if let Some(cmd) = &window.command {
-            ssh_cmd.push_str(&format!(" '{}'", cmd.replace("'", "'\\''")));
-        }
-        
-        // 为第一个窗口使用直接启动，后续窗口使用kitty @
-        if i == 0 {
-            // 第一个窗口直接在当前窗口打开
-            writeln!(script, "# 启动第一个窗口")?;
-            writeln!(script, "{} &", ssh_cmd)?;
-            writeln!(script, "FIRST_PID=$!")?;
-            writeln!(script, "sleep 1")?; // 给第一个窗口一点时间启动
-        } else {
-            // 设置标题
-            let title = window.title.as_deref().unwrap_or(&window.server);
+
+        // --- Generate SSH payload (wait, chmod, exec, rm) --- 
+        let final_ssh_payload = if let Some(cmd) = &window.command {
+            println!("  处理窗口 '{}': 找到命令, 准备上传脚本...", title);
+            let unique_id = format!("{}_{}", session.id.split('-').next().unwrap_or("session"), i);
+            let local_script_path = std::env::temp_dir().join(format!("rssh_local_init_{}.sh", unique_id));
+            let remote_script_path = format!("/tmp/rssh_remote_init_{}.sh", unique_id);
+
+            // Generate script content, PREPENDING the TERM export
+            let script_content = format!("#!/bin/sh\nset -e\nexport TERM=xterm-kitty\n{}\n", cmd);
+            std::fs::write(&local_script_path, &script_content)
+                 .with_context(|| format!("创建本地初始化脚本失败: {}", local_script_path.display()))?;
+            println!("    本地脚本: {}", local_script_path.display());
+
+            println!("    尝试上传到: {}@{}...", server_config.username, remote_script_path);
+            let mut upload_command = Command::new(&current_rssh_path);
+            upload_command
+                .arg("upload")
+                .arg(&window.server)
+                .arg(&local_script_path)
+                .arg(&remote_script_path);
             
-            // 根据position确定分割方向
-            let split_direction = match window.position.as_deref() {
+            // Execute and capture output
+            let upload_result = upload_command
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output();
+
+            // --- Temporarily disable LOCAL script cleanup for debugging --- 
+            // let _ = std::fs::remove_file(&local_script_path);
+            // println!("    本地临时脚本已删除: {}", local_script_path.display());
+            println!("    本地临时脚本保留用于调试: {}", local_script_path.display()); // Indicate script is kept
+
+            match upload_result {
+                Ok(upload_output) => {
+                    if upload_output.status.success() {
+                        println!("    上传成功 (退出码 0).");
+                        // --- Final SSH command with wait, chmod, EXECUTION, and RM ---
+                        let remote_script_escaped = shell_escape::escape(remote_script_path.into());
+                        format!(
+                            "'while [ ! -f {} ]; do sleep 0.1; done; chmod +x {} && {} && rm {} ; exec $SHELL'",
+                            remote_script_escaped, // for while
+                            remote_script_escaped, // for chmod
+                            remote_script_escaped, // for execution
+                            remote_script_escaped  // for rm
+                        )
+                    } else {
+                        eprintln!("    [Error] 上传失败 (退出码: {:?}). 将只启动交互式 shell.", upload_output.status.code());
+                        if !upload_output.stdout.is_empty() {
+                            eprintln!("      Upload stdout: {}", String::from_utf8_lossy(&upload_output.stdout));
+                        }
+                        if !upload_output.stderr.is_empty() {
+                            eprintln!("      Upload stderr: {}", String::from_utf8_lossy(&upload_output.stderr));
+                        }
+                        "''".to_string() // Fallback to interactive shell
+                    }
+                },
+                Err(e) => {
+                     eprintln!("    [Error] 执行 'rssh upload' 命令本身失败: {}. 将只启动交互式 shell.", e);
+                     "''".to_string() // Fallback to interactive shell
+                }
+            }
+        } else {
+             println!("  处理窗口 '{}': 无初始命令，直接启动交互式 shell.", title);
+            "''".to_string()
+        };
+
+        let final_ssh_cmd = format!("ssh -t {} {}", base_ssh_args, final_ssh_payload);
+        println!("    最终 SSH 命令: {}", final_ssh_cmd); // Keep this for debugging temporarily?
+
+        // --- Write the launch command to the .conf file --- 
+        if i == 0 {
+            writeln!(session_conf_writer, "# 第一个窗口 - {}", title)?;
+            writeln!(session_conf_writer, "launch --var {} --title '{}' {}", window_var, title, final_ssh_cmd)?;
+            writeln!(session_conf_writer)?;
+        } else {
+            let location = match window.position.as_deref() {
                 Some("vsplit") => "vsplit",
-                Some("hsplit") => "hsplit",
-                Some("split") => "split",
+                Some("hsplit") => "hsplit", 
+                Some("split") => "vsplit",
                 Some(custom) => custom,
-                None => "split",          
+                None => "vsplit",          
             };
             
-            writeln!(script, "# 启动窗口 {}", i+1)?;
-            writeln!(script, "kitty @ launch --type=window --title='{}' --location={} -- {}", 
-                title, split_direction, ssh_cmd)?;
+            writeln!(session_conf_writer, "# 窗口 {} - {}", i+1, title)?;
+            writeln!(session_conf_writer, "launch --location={} --var {} --title '{}' {}", 
+                location, window_var, title, final_ssh_cmd)?;
+            writeln!(session_conf_writer)?;
         }
-        
-        // 给命令一点时间执行
-        writeln!(script, "sleep 0.5")?;
     }
+    session_conf_writer.flush()?;
+    drop(session_conf_writer);
+    println!("临时会话配置文件已生成: {}", tmp_session_file.display());
+
+    // --- Step 2: Generate and execute the launch script (.sh) --- 
+    let mut launch_script_path = std::env::temp_dir();
+    launch_script_path.push(format!("rssh_kitty_launch_{}.sh", session.id));
+    let mut script = std::fs::File::create(&launch_script_path)?;
+
+    writeln!(script, "#!/bin/sh")?;
+    writeln!(script, "export TERM=xterm-kitty")?;
+    writeln!(script, "# 启动kitty新窗口并使用生成的会话配置")?;
+    writeln!(script, "kitty --session '{}' --title 'RSSH Session: {}' & disown", 
+             tmp_session_file.display(), session.name)?;
+    writeln!(script, "exit 0")?;
     
-    // 等待第一个进程结束
-    writeln!(script, "# 等待第一个窗口关闭")?;
-    writeln!(script, "wait $FIRST_PID")?;
-    
-    // 设置脚本为可执行
-    let mut perms = std::fs::metadata(&tmp_file)?.permissions();
+    script.flush()?;
+    drop(script);
+    let mut perms = std::fs::metadata(&launch_script_path)?.permissions();
     perms.set_mode(0o755);
-    std::fs::set_permissions(&tmp_file, perms)?;
+    std::fs::set_permissions(&launch_script_path, perms)?;
+    println!("临时启动脚本已生成: {}", launch_script_path.display());
+
+    // --- Step 3: Execute the launch script --- 
+    println!("执行启动脚本以打开 Kitty 窗口...");
     
-    // 打印脚本路径以便调试
-    println!("临时脚本文件: {}", tmp_file.display());
-    
-    // 执行脚本
-    let status = std::process::Command::new(&tmp_file)
-        .status()
-        .context("无法执行kitty脚本")?;
-    
-    // 删除临时脚本
-    std::fs::remove_file(&tmp_file)?;
-    
-    if !status.success() {
-        return Err(anyhow::anyhow!("kitty脚本返回非零状态码: {}", status));
-    }
+    let _ = std::process::Command::new(&launch_script_path)
+        .spawn()
+        .context("无法执行启动脚本")?;
+
+    std::thread::sleep(std::time::Duration::from_millis(500)); 
+
+    // --- Temporarily disable launch script cleanup for debugging --- 
+    // let _ = std::fs::remove_file(&launch_script_path);
+    // println!("本地启动脚本已删除: {}", launch_script_path.display());
+    println!("本地启动脚本保留用于调试: {}", launch_script_path.display()); // Indicate script is kept
+
+    println!("会话已在新窗口启动。远程脚本执行后将被自动删除。");
+    println!("会话配置文件保留在: {}", tmp_session_file.display());
     
     Ok(())
 }
@@ -1354,7 +1420,7 @@ fn start_session_with_tmux(config_manager: &ConfigManager, session: &SessionConf
         
         // 添加命令（如果有）
         if let Some(cmd) = &window.command {
-            ssh_cmd.push_str(&format!(" '{}'", cmd.replace("'", "'\\''")));
+            ssh_cmd.push_str(&format!(" '{}'", cmd.replace("'", "'\''")));
         }
         
         // 窗口标题
