@@ -13,11 +13,12 @@ pub mod rclone;
 pub use ssh::*;
 pub use ssh_config::*;
 pub use russh_client::*;
-pub use simple_ssh::{connect_via_system_ssh, ssh_command_connect};
+pub use simple_ssh::{connect_via_system_ssh, connect_via_system_ssh_with_command, ssh_command_connect};
 pub use file_transfer::{
     upload_file, download_file,
     upload_file_sftp, download_file_sftp,
     upload_file_kitty, download_file_kitty,
     upload_file_auto, download_file_auto
 };
+pub use self::ssh::SshClient;
  

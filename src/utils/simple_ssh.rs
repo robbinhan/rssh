@@ -7,7 +7,17 @@ use crate::utils::kitty_transfer::is_kitty_available;
 
 // 使用基于子进程的方法
 // 这个实现直接使用系统的ssh命令，绕过Rust的SSH库
-pub fn connect_via_system_ssh(server: &ServerConfig, use_rzsz: bool, use_kitten: bool) -> Result<()> {
+pub fn connect_via_system_ssh(server: &ServerConfig, use_rzsz: bool, use_kitten: bool) -> Result<i32> {
+    connect_via_system_ssh_with_command(server, None, use_rzsz, use_kitten)
+}
+
+// 支持命令的版本
+pub fn connect_via_system_ssh_with_command(
+    server: &ServerConfig, 
+    command: Option<String>, 
+    use_rzsz: bool, 
+    use_kitten: bool
+) -> Result<i32> {
     // 检查是否使用kitty的kitten ssh
     let use_kitty_kitten = use_kitten && is_kitty_available();
     
@@ -146,7 +156,7 @@ expect {{
         AuthType::Agent => {
             // 默认使用SSH代理，不需要额外参数
         },
-        AuthType::Password(password) => {
+        AuthType::Password(_password) => {
             // 检查是否安装了expect
             if let Ok(expect_path) = which::which("expect") {
                 println!("使用expect自动处理密码输入...");
@@ -158,7 +168,11 @@ expect {{
                      expect \"password:\"\n\
                      send \"{}\\\r\"\n\
                      interact",
-                    ssh_path.display(), server.port, server.username, server.host, password.replace("\"", "\\\"").replace("\\", "\\\\")
+                    ssh_path.display(), server.port, server.username, server.host, 
+                    match &server.auth_type {
+                        AuthType::Password(pwd) => pwd,
+                        _ => "",
+                    }.replace("\"", "\\\"").replace("\\", "\\\\")
                 );
                 
                 // 创建临时脚本文件
@@ -197,7 +211,7 @@ expect {{
                     }
                 }
                 
-                return Ok(());
+                return Ok(0);
             } else {
                 println!("警告: 未安装expect，无法自动处理密码输入。");
                 println!("请安装expect或使用密钥认证：");
@@ -226,6 +240,11 @@ expect {{
     args.push("HostKeyAlgorithms=+ssh-rsa".to_string());
     args.push("-o".to_string());
     args.push("PubkeyAcceptedAlgorithms=+ssh-rsa".to_string());
+    
+    // 添加命令（如果有）
+    if let Some(cmd) = command {
+        args.push(cmd);
+    }
     
     // 检查是否安装了lrzsz，如果是，则使用我们的rzsz代理
     let rzsz_enabled = is_lrzsz_installed();
@@ -281,7 +300,7 @@ expect {{
                 }
             }
             
-            return Ok(());
+            return Ok(0);
         } else {
             println!("未找到rzsz-proxy程序，使用普通SSH连接");
         }
@@ -322,15 +341,12 @@ expect {{
     
     println!("\n连接已关闭");
     
+    let exit_code = status.code().unwrap_or(1);
     if !status.success() {
-        if let Some(code) = status.code() {
-            return Err(anyhow::anyhow!("SSH进程退出，代码: {}", code));
-        } else {
-            return Err(anyhow::anyhow!("SSH进程被信号中断"));
-        }
+        println!("SSH进程退出，代码: {}", exit_code);
     }
     
-    Ok(())
+    Ok(exit_code)
 }
 
 /// 检查系统是否安装了lrzsz

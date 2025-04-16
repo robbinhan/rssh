@@ -11,6 +11,7 @@
 - 远程命令执行
 - 从 ~/.ssh/config 导入服务器配置
 - 多种连接模式，包括内置库和系统SSH命令
+- 会话管理，支持多窗口连接和命令执行
 
 ## 安装
 
@@ -197,6 +198,82 @@ rssh copy --from source_server --from-path /path/to/source/dir \
 4. 路径可以是相对路径或绝对路径
 5. 如果目标路径已存在同名文件，会被覆盖
 
+### 管理会话
+
+会话允许您配置一组服务器连接，并以多窗口方式同时连接到它们。支持tmux和kitty终端布局。
+
+#### 创建会话
+
+```bash
+# 创建一个新的空会话
+rssh session-create --name my_session --description "我的开发环境"
+
+# 从配置文件创建会话
+rssh session-create --name my_session --config session.toml
+```
+
+#### 列出会话
+
+```bash
+rssh session-list
+```
+
+#### 编辑会话
+
+```bash
+rssh session-edit my_session
+```
+
+编辑使用系统默认编辑器（$EDITOR环境变量）打开会话配置文件进行编辑。
+
+#### 启动会话
+
+```bash
+# 自动检测环境（如果在kitty终端中则使用kitty布局，否则尝试使用tmux）
+rssh session-start my_session
+
+# 强制使用tmux
+rssh session-start my_session --tmux
+
+# 强制使用kitty布局（需要在kitty终端中，并启用远程控制）
+rssh session-start my_session --kitty
+```
+
+**注意：** 使用kitty终端需要在`~/.config/kitty/kitty.conf`中添加`allow_remote_control yes`并重启kitty终端。
+
+#### 删除会话
+
+```bash
+rssh session-remove my_session
+```
+
+#### 会话配置文件示例
+
+```toml
+# 会话选项配置
+[options]
+# layout选项可以是"tiled"（平铺）或"tabs"（标签页），用于tmux会话
+layout = "tiled"
+# 是否在启动后自动调整窗口大小以适应终端大小
+auto_resize = "true"
+
+# 窗口配置
+# 每个窗口对应一个服务器连接
+[windows.web1]
+# 服务器名称或ID (必需字段)
+server = "web-server-1"
+# 连接后执行的命令 (可选)
+command = "cd /var/www && ls -la"
+# 窗口位置 (可选，kitty终端布局使用)
+# 例如: "vsplit"/"hsplit"/"split" 或 坐标如 "0,0"
+position = "vsplit"
+
+[windows.web2]
+server = "web-server-2"
+command = "htop"
+position = "hsplit"
+```
+
 ## 配置文件
 
 配置文件存储在以下位置：
@@ -204,10 +281,14 @@ rssh copy --from source_server --from-path /path/to/source/dir \
 - Linux/macOS: `~/.config/rssh/servers.db` 或者 `~/Library/Application\ Support/`
 - Windows: `C:\Users\<用户名>\AppData\Roaming\rssh\servers.db`
 
+会话配置文件存储在：
+
+- Linux/macOS: `~/.config/rssh/sessions/`
+- Windows: `C:\Users\<用户名>\AppData\Roaming\rssh\sessions\`
+
 ## TODO
 - [X] copy命令：从某个服务器的路径拷贝文件或目录到另一个服务器路径上
-- [ ] connect group: 连接一组服务器，分屏展示（需要kitty终端支持）
-- [ ] session: 可以支持根据配置以多个窗口连接服务器，同时执行命令（类似tmux的session）
+- [X] session: 可以支持根据配置以多个窗口连接服务器，同时执行命令（类似tmux的session）
 
 ## 许可证
 

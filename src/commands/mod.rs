@@ -1,12 +1,13 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use crate::models::{AuthType, ServerConfig};
-use crate::config::{ConfigManager, get_db_path};
-use crate::utils::{SshClient, import_ssh_config, connect_via_system_ssh, ssh_command_connect, russh_connect};
+use crate::models::{AuthType, ServerConfig, SessionConfig, SessionWindow};
+use crate::config::{ConfigManager, get_db_path, get_session_dir, SessionManager};
+use crate::utils::{SshClient, import_ssh_config, connect_via_system_ssh, connect_via_system_ssh_with_command, ssh_command_connect, russh_connect};
 use crate::utils::rclone::RcloneConfig;
 use uuid::Uuid;
 use colored::*;
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use crate::utils::server_info::display_server_info;
 
@@ -221,6 +222,58 @@ enum Commands {
         /// 目标服务器上的路径
         #[arg(short, long)]
         to_path: String,
+    },
+
+    /// 创建新的会话
+    #[command(name = "session-create")]
+    SessionCreate {
+        /// 会话名称
+        #[arg(short = 'n', long)]
+        name: String,
+        
+        /// 会话描述
+        #[arg(short, long)]
+        description: Option<String>,
+        
+        /// 配置文件路径（可选，如果提供，将从该文件导入配置）
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    
+    /// 列出所有会话
+    #[command(name = "session-list")]
+    SessionList,
+    
+    /// 编辑会话
+    #[command(name = "session-edit")]
+    SessionEdit {
+        /// 会话名称或ID
+        #[arg(index = 1)]
+        session: String,
+    },
+    
+    /// 删除会话
+    #[command(name = "session-remove")]
+    SessionRemove {
+        /// 会话名称或ID
+        #[arg(index = 1)]
+        session: String,
+    },
+    
+    /// 启动会话
+    #[command(name = "session-start")]
+    SessionStart {
+        /// 会话名称或ID
+        #[arg(index = 1)]
+        session: String,
+        
+        /// 使用tmux（如果安装）
+        #[arg(long)]
+        tmux: bool,
+        
+        /// 使用kitty terminal支持的布局（如果在kitty中运行）
+        #[arg(long)]
+        kitty: bool,
     },
 }
 
@@ -858,8 +911,483 @@ pub fn run() -> Result<()> {
             println!("开始复制文件...");
             rclone_config.copy(&from_server, &from_path, &to_server, &to_path)?;
             println!("复制完成！");
+        },
+
+        Commands::SessionCreate { name, description, config } => {
+            let session_manager = SessionManager::new(get_session_dir()?)?;
+            
+            // 如果提供了配置文件，尝试从中导入
+            if let Some(config_path) = config {
+                // 检查文件是否存在
+                if !config_path.exists() {
+                    return Err(anyhow::anyhow!("配置文件不存在: {}", config_path.display()));
+                }
+                
+                // 读取配置文件内容
+                let content = std::fs::read_to_string(&config_path)
+                    .context(format!("无法读取配置文件: {}", config_path.display()))?;
+                
+                // 解析TOML
+                let parsed_config: toml::Value = toml::from_str(&content)
+                    .context("无法解析TOML配置文件")?;
+                
+                // 创建窗口配置
+                let mut windows = Vec::new();
+                let empty_table = toml::value::Table::new();
+                
+                // 读取窗口配置
+                if let Some(windows_table) = parsed_config.get("windows")
+                    .and_then(|v| v.as_table()) 
+                {
+                    for (window_name, window_config) in windows_table {
+                        let window_table = window_config.as_table().unwrap_or(&empty_table);
+                        
+                        // 检查必要的server字段
+                        let server = match window_table.get("server").and_then(|v| v.as_str()) {
+                            Some(s) => s.to_string(),
+                            None => {
+                                eprintln!("警告: 窗口 '{}' 未指定服务器，将被跳过", window_name);
+                                continue;
+                            }
+                        };
+                        
+                        // 创建窗口配置
+                        let window = SessionWindow {
+                            title: Some(window_name.clone()),
+                            server,
+                            command: window_table.get("command").and_then(|v| v.as_str()).map(String::from),
+                            position: window_table.get("position").and_then(|v| v.as_str()).map(String::from),
+                            size: window_table.get("size").and_then(|v| v.as_str()).map(String::from),
+                        };
+                        
+                        windows.push(window);
+                    }
+                } else {
+                    return Err(anyhow::anyhow!("配置文件中未找到windows部分"));
+                }
+                
+                // 读取选项
+                let mut options = std::collections::HashMap::new();
+                if let Some(opts_table) = parsed_config.get("options")
+                    .and_then(|v| v.as_table()) 
+                {
+                    for (key, value) in opts_table {
+                        if let Some(value_str) = value.as_str() {
+                            options.insert(key.clone(), value_str.to_string());
+                        }
+                    }
+                }
+                
+                // 创建会话
+                let session = session_manager.create_session(
+                    name, 
+                    description, 
+                    windows,
+                    Some(options)
+                )?;
+                
+                println!("成功创建会话: {}", session.name);
+            } else {
+                // 如果没有提供配置文件，创建一个空会话配置，用户稍后可以编辑它
+                session_manager.create_session(name, description, Vec::new(), None)?;
+                println!("已创建空会话配置，请使用 'rssh session-edit' 编辑它");
+            }
+        },
+        
+        Commands::SessionList => {
+            let session_manager = SessionManager::new(get_session_dir()?)?;
+            let sessions = session_manager.list_sessions()?;
+            
+            if sessions.is_empty() {
+                println!("没有找到会话配置");
+                return Ok(());
+            }
+            
+            // 计算表格宽度
+            let id_width = 8;  // 短ID
+            let name_width = 20;
+            let desc_width = 30;
+            let windows_width = 10;
+            
+            // 表格总宽度
+            let total_width = id_width + name_width + desc_width + windows_width + 10; // 10是分隔符的宽度
+            
+            // 打印表头
+            let top_border = format!("{}{}{}",
+                "╭".bright_cyan(),
+                "─".bright_cyan().to_string().repeat(total_width - 2),
+                "╮".bright_cyan()
+            );
+            println!("{}", top_border);
+            
+            // 打印标题行
+            println!("{} {:<id_width$} │ {:<name_width$} │ {:<desc_width$} │ {:<windows_width$} {}",
+                "│".bright_cyan(),
+                "ID".bright_white().bold(),
+                "名称".bright_white().bold(),
+                "描述".bright_white().bold(),
+                "窗口数".bright_white().bold(),
+                "│".bright_cyan(),
+            );
+            
+            // 打印分隔行
+            let separator = format!("{}{}{}{}{}{}{}{}{}",
+                "├".bright_cyan(),
+                "─".bright_cyan().to_string().repeat(id_width + 2),
+                "┼".bright_cyan(),
+                "─".bright_cyan().to_string().repeat(name_width + 2),
+                "┼".bright_cyan(),
+                "─".bright_cyan().to_string().repeat(desc_width + 2),
+                "┼".bright_cyan(),
+                "─".bright_cyan().to_string().repeat(windows_width + 2),
+                "┤".bright_cyan()
+            );
+            println!("{}", separator);
+            
+            // 打印数据行
+            for session in &sessions {
+                // 截取ID的前8个字符
+                let short_id = if session.id.len() > 8 {
+                    &session.id[0..8]
+                } else {
+                    &session.id
+                };
+                
+                // 截取描述
+                let desc = session.description.as_deref().unwrap_or("--");
+                let short_desc = if desc.len() > desc_width {
+                    desc[0..desc_width - 3].to_string() + "..."
+                } else {
+                    desc.to_string()
+                };
+                
+                println!("{} {:<id_width$} │ {:<name_width$} │ {:<desc_width$} │ {:<windows_width$} {}",
+                    "│".bright_cyan(),
+                    short_id.bright_yellow(),
+                    session.name.bright_green(),
+                    short_desc,
+                    session.windows.len().to_string().bright_blue(),
+                    "│".bright_cyan(),
+                );
+            }
+            
+            // 打印底部
+            let bottom_border = format!("{}{}{}",
+                "╰".bright_cyan(),
+                "─".bright_cyan().to_string().repeat(total_width - 2),
+                "╯".bright_cyan()
+            );
+            println!("{}", bottom_border);
+            
+            // 打印会话数量
+            println!("\n共找到 {} 个会话配置", sessions.len().to_string().bright_green().bold());
+            
+            // 打印使用提示
+            println!("\n提示: 使用 {} 启动会话", "rssh session-start <ID或名称>".bright_yellow());
+        },
+        
+        Commands::SessionEdit { session } => {
+            let session_manager = SessionManager::new(get_session_dir()?)?;
+            
+            // 首先尝试按ID查找
+            let session_id = if session_manager.session_exists(&session) {
+                session.clone()
+            } else {
+                // 尝试按名称查找
+                match session_manager.find_session_by_name(&session)? {
+                    Some(s) => s.id,
+                    None => return Err(anyhow::anyhow!("未找到会话: {}", session)),
+                }
+            };
+            
+            // 获取会话配置的路径
+            let session_path = session_manager.get_session_path(&session_id);
+            
+            // 使用系统默认编辑器打开配置文件
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+            let status = std::process::Command::new(editor)
+                .arg(&session_path)
+                .status()
+                .context("无法启动编辑器")?;
+            
+            if !status.success() {
+                return Err(anyhow::anyhow!("编辑器返回非零状态码: {}", status));
+            }
+            
+            println!("会话配置已更新");
+        },
+        
+        Commands::SessionRemove { session } => {
+            let session_manager = SessionManager::new(get_session_dir()?)?;
+            
+            // 首先尝试按ID查找
+            let session_id = if session_manager.session_exists(&session) {
+                session.clone()
+            } else {
+                // 尝试按名称查找
+                match session_manager.find_session_by_name(&session)? {
+                    Some(s) => s.id,
+                    None => return Err(anyhow::anyhow!("未找到会话: {}", session)),
+                }
+            };
+            
+            // 删除会话
+            session_manager.remove_session(&session_id)?;
+            println!("会话已删除");
+        },
+        
+        Commands::SessionStart { session, tmux, kitty } => {
+            let session_manager = SessionManager::new(get_session_dir()?)?;
+            
+            // 首先尝试按ID查找
+            let session_config = if session_manager.session_exists(&session) {
+                session_manager.load_session(&session)?
+            } else {
+                // 尝试按名称查找
+                match session_manager.find_session_by_name(&session)? {
+                    Some(s) => s,
+                    None => return Err(anyhow::anyhow!("未找到会话: {}", session)),
+                }
+            };
+            
+            // 检查窗口配置
+            if session_config.windows.is_empty() {
+                return Err(anyhow::anyhow!("会话 '{}' 没有配置窗口", session_config.name));
+            }
+            
+            // 根据环境选择会话启动方式
+            if kitty || (std::env::var("TERM").unwrap_or_default().contains("kitty") && !tmux) {
+                // 使用kitty终端的布局
+                start_session_with_kitty(&config_manager, &session_config)?;
+            } else if tmux || std::env::var("TMUX").is_ok() {
+                // 使用tmux
+                start_session_with_tmux(&config_manager, &session_config)?;
+            } else {
+                // 默认行为：按顺序连接到每个窗口
+                println!("警告: 未检测到支持多窗口的环境，将按顺序连接");
+                
+                for window in &session_config.windows {
+                    // 查找服务器配置
+                    let server_config = find_server(&config_manager, &window.server)?;
+                    
+                    println!("连接到 {}", server_config.name.bright_green());
+                    
+                    // 使用System模式连接
+                    match connect_via_system_ssh_with_command(&server_config, window.command.clone(), false, false) {
+                        Ok(exit_code) => {
+                            if exit_code != 0 {
+                                eprintln!("警告: 服务器 {} 返回非零状态码: {}", 
+                                    server_config.name, exit_code);
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("连接到服务器 {} 时出错: {}", server_config.name, e);
+                        }
+                    }
+                }
+            }
+        },
+    }
+    
+    Ok(())
+}
+
+/// 查找服务器配置（按ID或名称）
+fn find_server(config_manager: &ConfigManager, server_id_or_name: &str) -> Result<ServerConfig> {
+    // 首先尝试按ID查找
+    let server_config = config_manager.get_server(server_id_or_name)?;
+    
+    // 如果按ID找不到，尝试按名称查找
+    let server_config = if server_config.is_none() {
+        let servers = config_manager.list_servers()?;
+        servers.into_iter().find(|s| s.name == server_id_or_name)
+    } else {
+        server_config
+    };
+    
+    server_config.ok_or_else(|| anyhow::anyhow!("未找到服务器: {}", server_id_or_name))
+}
+
+/// 使用kitty终端的布局功能启动会话
+fn start_session_with_kitty(config_manager: &ConfigManager, session: &SessionConfig) -> Result<()> {
+    // 检查是否在kitty终端中
+    if !std::env::var("TERM").unwrap_or_default().contains("kitty") {
+        return Err(anyhow::anyhow!("当前终端不是kitty"));
+    }
+    
+    println!("使用kitty启动会话: {}", session.name.bright_green());
+    
+    // 创建临时脚本文件
+    let mut tmp_file = std::env::temp_dir();
+    tmp_file.push(format!("rssh_session_{}.sh", session.id));
+    
+    let mut script = std::fs::File::create(&tmp_file)?;
+    writeln!(script, "#!/bin/sh")?;
+    
+    // 启用远程控制 - 使用正确的kitty远程控制命令
+    writeln!(script, "# 先检查是否已启用远程控制")?;
+    writeln!(script, "kitty @ ls > /dev/null 2>&1")?;
+    writeln!(script, "if [ $? -ne 0 ]; then")?;
+    writeln!(script, "  echo \"警告: kitty远程控制未启用，请在~/.config/kitty/kitty.conf中添加'allow_remote_control yes'并重启kitty\"")?;
+    writeln!(script, "  echo \"尝试继续执行...\"")?;
+    writeln!(script, "fi")?;
+    
+    // 对于每个窗口，创建相应的kitty命令
+    for (i, window) in session.windows.iter().enumerate() {
+        // 查找服务器配置
+        let server_config = find_server(config_manager, &window.server)?;
+        
+        // 创建SSH命令
+        let mut ssh_cmd = format!("ssh {}@{} -p {}", 
+            server_config.username, 
+            server_config.host, 
+            server_config.port);
+        
+        // 添加认证参数
+        if let Some(key_path) = server_config.auth_type.get_key_path() {
+            ssh_cmd.push_str(&format!(" -i {}", key_path));
+        }
+        
+        // 添加命令（如果有）
+        if let Some(cmd) = &window.command {
+            ssh_cmd.push_str(&format!(" '{}'", cmd.replace("'", "'\\''")));
+        }
+        
+        // 为第一个窗口使用直接启动，后续窗口使用kitty @
+        if i == 0 {
+            // 第一个窗口直接在当前窗口打开
+            writeln!(script, "# 启动第一个窗口")?;
+            writeln!(script, "{} &", ssh_cmd)?;
+            writeln!(script, "FIRST_PID=$!")?;
+            writeln!(script, "sleep 1")?; // 给第一个窗口一点时间启动
+        } else {
+            // 设置标题
+            let title = window.title.as_deref().unwrap_or(&window.server);
+            
+            // 根据position确定分割方向
+            let split_direction = match window.position.as_deref() {
+                Some("vsplit") => "vsplit",
+                Some("hsplit") => "hsplit",
+                Some("split") => "split",
+                Some(custom) => custom,
+                None => "split",          
+            };
+            
+            writeln!(script, "# 启动窗口 {}", i+1)?;
+            writeln!(script, "kitty @ launch --type=window --title='{}' --location={} -- {}", 
+                title, split_direction, ssh_cmd)?;
+        }
+        
+        // 给命令一点时间执行
+        writeln!(script, "sleep 0.5")?;
+    }
+    
+    // 等待第一个进程结束
+    writeln!(script, "# 等待第一个窗口关闭")?;
+    writeln!(script, "wait $FIRST_PID")?;
+    
+    // 设置脚本为可执行
+    let mut perms = std::fs::metadata(&tmp_file)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&tmp_file, perms)?;
+    
+    // 打印脚本路径以便调试
+    println!("临时脚本文件: {}", tmp_file.display());
+    
+    // 执行脚本
+    let status = std::process::Command::new(&tmp_file)
+        .status()
+        .context("无法执行kitty脚本")?;
+    
+    // 删除临时脚本
+    std::fs::remove_file(&tmp_file)?;
+    
+    if !status.success() {
+        return Err(anyhow::anyhow!("kitty脚本返回非零状态码: {}", status));
+    }
+    
+    Ok(())
+}
+
+/// 使用tmux启动会话
+fn start_session_with_tmux(config_manager: &ConfigManager, session: &SessionConfig) -> Result<()> {
+    // 检查tmux是否安装
+    let tmux_check = std::process::Command::new("which")
+        .arg("tmux")
+        .stdout(std::process::Stdio::null())
+        .status();
+    
+    if tmux_check.is_err() || !tmux_check.unwrap().success() {
+        return Err(anyhow::anyhow!("未找到tmux命令"));
+    }
+    
+    println!("使用tmux启动会话: {}", session.name.bright_green());
+    
+    // 创建唯一的会话名称
+    let tmux_session_name = format!("rssh_{}", session.id.split('-').next().unwrap_or("session"));
+    
+    // 创建tmux会话
+    let create_status = std::process::Command::new("tmux")
+        .args(["new-session", "-d", "-s", &tmux_session_name])
+        .status()
+        .context("无法创建tmux会话")?;
+    
+    if !create_status.success() {
+        return Err(anyhow::anyhow!("无法创建tmux会话"));
+    }
+    
+    // 对于每个窗口，创建相应的tmux窗口
+    for (i, window) in session.windows.iter().enumerate() {
+        // 查找服务器配置
+        let server_config = find_server(config_manager, &window.server)?;
+        
+        // 创建SSH命令
+        let mut ssh_cmd = format!("ssh {}@{} -p {}", 
+            server_config.username, 
+            server_config.host, 
+            server_config.port);
+        
+        // 添加认证参数
+        if let Some(key_path) = server_config.auth_type.get_key_path() {
+            ssh_cmd.push_str(&format!(" -i {}", key_path));
+        }
+        
+        // 添加命令（如果有）
+        if let Some(cmd) = &window.command {
+            ssh_cmd.push_str(&format!(" '{}'", cmd.replace("'", "'\\''")));
+        }
+        
+        // 窗口标题
+        let title = window.title.as_deref().unwrap_or(&window.server);
+        
+        if i == 0 {
+            // 重命名第一个窗口
+            std::process::Command::new("tmux")
+                .args(["rename-window", "-t", &format!("{}:0", tmux_session_name), title])
+                .status()?;
+            
+            // 发送命令到第一个窗口
+            std::process::Command::new("tmux")
+                .args(["send-keys", "-t", &format!("{}:0", tmux_session_name), &ssh_cmd, "Enter"])
+                .status()?;
+        } else {
+            // 创建新窗口
+            std::process::Command::new("tmux")
+                .args(["new-window", "-t", &tmux_session_name, "-n", title])
+                .status()?;
+            
+            // 发送命令到新窗口
+            std::process::Command::new("tmux")
+                .args(["send-keys", "-t", &format!("{}:{}", tmux_session_name, i), &ssh_cmd, "Enter"])
+                .status()?;
         }
     }
+    
+    // 附加到tmux会话
+    std::process::Command::new("tmux")
+        .args(["attach-session", "-t", &tmux_session_name])
+        .status()
+        .context("无法附加到tmux会话")?;
     
     Ok(())
 } 
