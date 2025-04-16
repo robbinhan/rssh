@@ -1,6 +1,8 @@
 pub mod manager;
+pub mod session_manager;
 
 pub use manager::ConfigManager;
+pub use session_manager::SessionManager;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -25,4 +27,16 @@ pub fn get_db_path() -> Result<PathBuf> {
     db_path.push("servers.db");
     
     Ok(db_path)
+}
+
+pub fn get_session_dir() -> Result<PathBuf> {
+    let mut session_dir = get_config_dir()?;
+    session_dir.push("sessions");
+    
+    if !session_dir.exists() {
+        std::fs::create_dir_all(&session_dir)
+            .with_context(|| format!("无法创建会话目录: {}", session_dir.display()))?;
+    }
+    
+    Ok(session_dir)
 } 

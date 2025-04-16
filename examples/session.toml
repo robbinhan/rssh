@@ -1,0 +1,36 @@
+# RSSH会话配置示例
+# 可以使用 rssh session-create -n 会话名称 -c session.toml 命令导入此配置
+
+# 会话选项配置
+[options]
+# layout 选项可以是"tiled"（平铺）或"tabs"（标签页），用于tmux会话
+layout = "tiled"
+# 是否在启动后自动调整窗口大小以适应终端大小
+auto_resize = "true"
+
+# 窗口配置
+# 每个窗口对应一个服务器连接
+[windows.web1]
+# 服务器名称或ID (必需字段)
+server = "web-server-1"
+# 连接后执行的命令 (可选)
+command = "cd /var/www && ls -la"
+# 窗口位置 (可选，kitty终端布局使用)
+# 例如: "vsplit"/"hsplit"/"split" 或 坐标如 "0,0"
+position = "vsplit"
+
+[windows.web2]
+server = "web-server-2"
+command = "htop"
+position = "hsplit"
+
+[windows.db]
+server = "db-server"
+command = "mysql -u root"
+position = "vsplit"
+
+[windows.logs]
+server = "log-server"
+command = "cd /var/log && tail -f application.log"
+position = "vsplit"
+
