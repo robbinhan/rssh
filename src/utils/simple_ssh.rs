@@ -18,12 +18,13 @@ pub fn connect_via_system_ssh_with_command(
     use_rzsz: bool, 
     use_kitten: bool
 ) -> Result<i32> {
+    println!("use_kitten: {}", use_kitten);
     // 检查是否使用kitty的kitten ssh
     let use_kitty_kitten = use_kitten && is_kitty_available();
-    
+    println!("use_kitty_kitten: {}", use_kitty_kitten);
     // 获取系统ssh命令的完整路径
     let ssh_path = if use_kitty_kitten {
-        std::path::PathBuf::from("kitty")
+        std::path::PathBuf::from("kitten")
     } else {
         which::which("ssh")
             .unwrap_or_else(|_| std::path::PathBuf::from("/usr/bin/ssh"))
@@ -34,7 +35,7 @@ pub fn connect_via_system_ssh_with_command(
     
     // 如果是kitty kitten，添加kitten ssh命令
     if use_kitty_kitten {
-        args.push("+kitten".to_string());
+        // args.push("+kitten".to_string());
         args.push("ssh".to_string());
     }
     
@@ -160,15 +161,20 @@ expect {{
             // 检查是否安装了expect
             if let Ok(expect_path) = which::which("expect") {
                 println!("使用expect自动处理密码输入...");
+
+                let mut args_str = String::new();
+                for arg in args {
+                    args_str.push_str(&format!("{} ", arg));
+                }
                 
                 // 创建expect脚本
                 let expect_script = format!(
                     "#!/usr/bin/expect -f\n\
-                     spawn {} -p {} {}@{} -o StrictHostKeyChecking=no -o HashKnownHosts=no -o ServerAliveInterval=60 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa\n\
+                     spawn {} {} -o StrictHostKeyChecking=no -o HashKnownHosts=no -o ServerAliveInterval=60 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa\n\
                      expect \"password:\"\n\
                      send \"{}\\\r\"\n\
                      interact",
-                    ssh_path.display(), server.port, server.username, server.host, 
+                    ssh_path.display(), args_str, 
                     match &server.auth_type {
                         AuthType::Password(pwd) => pwd,
                         _ => "",
