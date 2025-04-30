@@ -59,7 +59,7 @@ enum Commands {
         #[arg(short = 'H', long)]
         host: String,
         
-        #[arg(short, long, default_value = "22")]
+        #[arg(short = 'P', long, default_value = "22")]
         port: u16,
         
         #[arg(short, long)]
@@ -84,23 +84,6 @@ enum Commands {
     List {
         #[arg(short, long)]
         group: Option<String>,
-    },
-    
-    Connect {
-        #[arg(index = 1)]
-        server: String,
-        
-        #[arg(short, long)]
-        command: Option<String>,
-        
-        #[arg(short, long, value_enum, default_value = "system")]
-        mode: ConnectionMode,
-        
-        #[arg(long)]
-        rzsz: bool,
-        
-        #[arg(long)]
-        kitten: bool,
     },
     
     Remove {
@@ -436,70 +419,9 @@ pub fn run() -> Result<()> {
 
             if let Some(server_to_connect) = selected_server_option {
                 println!("准备连接到选中的服务器: {}", server_to_connect.name.clone().green());
-                connect_via_system_ssh(&server_to_connect, false, false)?;
+                connect_via_system_ssh(&server_to_connect, false, true)?;
             } else {
                 println!("已退出列表视图。");
-            }
-        },
-        
-        Commands::Connect { server, command, mode, rzsz, kitten } => {
-            let server_config = config_manager.get_server(&server)?;
-            
-            let server_config = if server_config.is_none() {
-                let servers = config_manager.list_servers()?;
-                servers.into_iter().find(|s| s.name == server)
-            } else {
-                server_config
-            };
-            
-            let server_config = match server_config {
-                Some(s) => s,
-                None => return Err(anyhow::anyhow!("找不到指定的服务器: {}", server)),
-            };
-            
-            println!("正在连接到 {}@{}:{}...", 
-                server_config.username.on_bright_yellow(), 
-                server_config.host.on_bright_green(), 
-                server_config.port.to_string().on_bright_blue()
-            );
-            
-            if let Some(cmd) = command {
-                let ssh_client = SshClient::connect(&server_config)?;
-                let (stdout, stderr, exit_status) = ssh_client.execute_command(&cmd)?;
-                
-                if !stdout.is_empty() {
-                    println!("{}", stdout);
-                }
-                
-                if !stderr.is_empty() {
-                    eprintln!("{}", stderr.on_red());
-                }
-                
-                std::process::exit(exit_status as i32);
-            } else {
-                match mode {
-                    ConnectionMode::Library => {
-                        let ssh_client = SshClient::connect(&server_config)?;
-                        println!("已连接，启动交互式shell...");
-                        ssh_client.start_shell()?;
-                    },
-                    ConnectionMode::System => {
-                        connect_via_system_ssh(&server_config, rzsz, kitten)?;
-                    },
-                    ConnectionMode::Exec => {
-                        ssh_command_connect(&server_config, kitten)?;
-                    },
-                    ConnectionMode::Debug => {
-                        let ssh_client = SshClient::connect(&server_config)?;
-                        println!("已连接，启动交互式shell（调试模式）...");
-                        println!("调试日志写入到: /tmp/rssh_debug.log");
-                        println!("你可以按Alt+D切换调试模式，显示按键代码");
-                        ssh_client.start_shell()?;
-                    },
-                    ConnectionMode::Russh => {
-                        russh_connect(&server_config)?;
-                    }
-                }
             }
         },
         
