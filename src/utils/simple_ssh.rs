@@ -23,7 +23,7 @@ pub fn connect_via_system_ssh_with_command(
     let use_kitty_kitten = use_kitten && is_kitty_available();
     println!("use_kitty_kitten: {}", use_kitty_kitten);
     // 获取系统ssh命令的完整路径
-    let mut ssh_path = if use_kitty_kitten {
+    let ssh_path = if use_kitty_kitten {
         std::path::PathBuf::from("kitten")
     } else {
         which::which("ssh")
@@ -68,9 +68,6 @@ pub fn connect_via_system_ssh_with_command(
                     for arg in args {
                         args_str.push_str(&format!("{} ", arg));
                     }
-
-                    ssh_path = std::path::PathBuf::from("");
-
 
                     // 创建expect脚本
                     let expect_script = format!(
