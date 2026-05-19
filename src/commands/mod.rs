@@ -929,7 +929,7 @@ pub fn run() -> Result<()> {
                 return Err(anyhow::anyhow!("会话 '{}' 没有配置窗口", session_config.name));
             }
             
-            if kitty || (std::env::var("TERM").unwrap_or_default().contains("kitty") && !tmux) {
+            if kitty || (crate::utils::terminal::is_kitty() && !tmux) {
                 start_session_with_kitty(&config_manager, &session_config)?;
             } else if tmux || std::env::var("TMUX").is_ok() {
                 start_session_with_tmux(&config_manager, &session_config)?;
@@ -974,7 +974,7 @@ fn find_server(config_manager: &ConfigManager, server_id_or_name: &str) -> Resul
 }
 
 fn start_session_with_kitty(config_manager: &ConfigManager, session: &SessionConfig) -> Result<()> {
-    if !std::env::var("TERM").unwrap_or_default().contains("kitty") {
+    if !crate::utils::terminal::is_kitty() {
         return Err(anyhow::anyhow!("当前终端不是kitty"));
     }
     

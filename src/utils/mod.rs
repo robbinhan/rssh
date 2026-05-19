@@ -9,6 +9,7 @@ pub mod kitty_transfer;
 pub mod handle_rzsz;
 pub mod server_info;
 pub mod rclone;
+pub mod terminal;
 
 pub use ssh::*;
 pub use ssh_config::*;

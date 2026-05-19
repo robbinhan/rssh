@@ -108,15 +108,13 @@ pub fn download_via_kitty(
 
 /// 检测当前环境是否支持Kitty的传输协议
 pub fn is_kitty_available() -> bool {
-    // 检查TERM环境变量
-    let is_kitty_term = std::env::var("TERM").map(|val| val == "xterm-kitty").unwrap_or(false);
-    
-    // 检查kitty命令是否可用
-    let has_kitty_command = Command::new("kitty")
+    if !crate::utils::terminal::is_kitty() {
+        return false;
+    }
+
+    Command::new("kitty")
         .arg("--version")
         .output()
         .map(|output| output.status.success())
-        .unwrap_or(false);
-    
-    is_kitty_term && has_kitty_command
-} 
+        .unwrap_or(false)
+}

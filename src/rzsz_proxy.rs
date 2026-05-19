@@ -182,9 +182,7 @@ fn main() -> io::Result<()> {
                 if is_rz_command(&stdin_buf[0..n]) {
                     println!("检测到rz命令");
                     
-                    // 检查是否在Kitty终端
-                    let is_kitty = std::env::var("TERM").map(|val| val == "xterm-kitty").unwrap_or(false);
-                    if is_kitty {
+                    if rssh::utils::terminal::is_kitty() {
                         println!("\n提示: 您正在使用Kitty终端，建议使用Kitty的文件传输协议代替rz/sz。");
                         println!("命令示例:");
                         println!("  上传: kitty +kitten transfer 本地文件路径");
@@ -193,7 +191,7 @@ fn main() -> io::Result<()> {
                         println!("  上传: rssh upload 服务器名 本地文件路径 [远程路径] --mode kitty");
                         println!("  下载: rssh download 服务器名 远程文件路径 [本地路径] --mode kitty\n");
                     }
-                    
+
                     // 处理rz命令 (上传文件到远程)
                     if let Ok(file_path) = select_file_dialog() {
                         if !file_path.is_empty() {
@@ -218,9 +216,7 @@ fn main() -> io::Result<()> {
                 else if is_sz_command(&stdin_buf[0..n]) {
                     println!("检测到sz命令");
                     
-                    // 检查是否在Kitty终端
-                    let is_kitty = std::env::var("TERM").map(|val| val == "xterm-kitty").unwrap_or(false);
-                    if is_kitty {
+                    if rssh::utils::terminal::is_kitty() {
                         println!("\n提示: 您正在使用Kitty终端，建议使用Kitty的文件传输协议代替rz/sz。");
                         println!("命令示例:");
                         println!("  上传: kitty +kitten transfer 本地文件路径");
@@ -229,7 +225,7 @@ fn main() -> io::Result<()> {
                         println!("  上传: rssh upload 服务器名 本地文件路径 [远程路径] --mode kitty");
                         println!("  下载: rssh download 服务器名 远程文件路径 [本地路径] --mode kitty\n");
                     }
-                    
+
                     // 将sz命令发送给SSH (下载文件会在stdout线程处理)
                 }
                 

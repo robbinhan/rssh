@@ -7,4 +7,5 @@ pub mod utils {
     pub mod handle_rzsz;
     pub mod kitty_transfer;
     pub mod rzsz;
+    pub mod terminal;
 } 
