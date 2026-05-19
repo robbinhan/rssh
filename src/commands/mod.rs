@@ -85,6 +85,10 @@ enum Commands {
         #[arg(short, long)]
         group: Option<String>,
     },
+
+    Connect {
+        server: String,
+    },
     
     Remove {
         server: String,
@@ -210,54 +214,77 @@ fn run_list_tui<B: Backend>(
     group_filter: Option<String>,
 ) -> Result<Option<ServerConfig>> {
     let mut table_state = TableState::default();
-    if !servers.is_empty() {
-        table_state.select(Some(0));
-    }
+    let mut search = String::new();
 
     loop {
-        terminal.draw(|f| ui(f, &servers, group_filter.as_deref(), &mut table_state))?;
+        let filtered: Vec<&ServerConfig> = if search.is_empty() {
+            servers.iter().collect()
+        } else {
+            let needle = search.to_lowercase();
+            servers
+                .iter()
+                .filter(|s| {
+                    s.name.to_lowercase().contains(&needle)
+                        || s.host.to_lowercase().contains(&needle)
+                        || s.username.to_lowercase().contains(&needle)
+                        || s.group
+                            .as_deref()
+                            .map(|g| g.to_lowercase().contains(&needle))
+                            .unwrap_or(false)
+                })
+                .collect()
+        };
+
+        if filtered.is_empty() {
+            table_state.select(None);
+        } else {
+            match table_state.selected() {
+                Some(i) if i >= filtered.len() => {
+                    table_state.select(Some(filtered.len() - 1));
+                }
+                None => table_state.select(Some(0)),
+                _ => {}
+            }
+        }
+
+        terminal.draw(|f| ui(f, &filtered, group_filter.as_deref(), &search, &mut table_state))?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
-                        KeyCode::Char('q') => return Ok(None),
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if !servers.is_empty() {
+                        KeyCode::Esc => return Ok(None),
+                        KeyCode::Down => {
+                            if !filtered.is_empty() {
                                 let i = match table_state.selected() {
-                                    Some(i) => {
-                                        if i >= servers.len() - 1 {
-                                            0
-                                        } else {
-                                            i + 1
-                                        }
-                                    }
+                                    Some(i) if i >= filtered.len() - 1 => 0,
+                                    Some(i) => i + 1,
                                     None => 0,
                                 };
                                 table_state.select(Some(i));
                             }
                         }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if !servers.is_empty() {
+                        KeyCode::Up => {
+                            if !filtered.is_empty() {
                                 let i = match table_state.selected() {
-                                    Some(i) => {
-                                        if i == 0 {
-                                            servers.len() - 1
-                                        } else {
-                                            i - 1
-                                        }
-                                    }
-                                    None => servers.len() - 1,
+                                    Some(0) | None => filtered.len() - 1,
+                                    Some(i) => i - 1,
                                 };
                                 table_state.select(Some(i));
                             }
                         }
                         KeyCode::Enter => {
-                            if let Some(selected_index) = table_state.selected() {
-                                if let Some(selected_server) = servers.get(selected_index).cloned() {
-                                    return Ok(Some(selected_server));
+                            if let Some(i) = table_state.selected() {
+                                if let Some(s) = filtered.get(i) {
+                                    return Ok(Some((*s).clone()));
                                 }
                             }
+                        }
+                        KeyCode::Backspace => {
+                            search.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            search.push(c);
                         }
                         _ => {}
                     }
@@ -267,10 +294,17 @@ fn run_list_tui<B: Backend>(
     }
 }
 
-fn ui(f: &mut Frame, servers: &[ServerConfig], group_filter: Option<&str>, state: &mut TableState) {
+fn ui(
+    f: &mut Frame,
+    servers: &[&ServerConfig],
+    group_filter: Option<&str>,
+    search: &str,
+    state: &mut TableState,
+) {
     let main_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Min(0),
             Constraint::Length(1),
@@ -287,11 +321,31 @@ fn ui(f: &mut Frame, servers: &[ServerConfig], group_filter: Option<&str>, state
         .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT);
     f.render_widget(title, main_layout[0]);
 
+    let search_display = if search.is_empty() {
+        "(输入字符开始过滤)".to_string()
+    } else {
+        format!("{}_", search)
+    };
+    let search_box = Paragraph::new(Text::styled(
+        search_display,
+        Style::default().fg(if search.is_empty() {
+            Color::DarkGray
+        } else {
+            Color::Yellow
+        }),
+    ))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" 搜索 ({} 条匹配) ", servers.len())),
+    );
+    f.render_widget(search_box, main_layout[1]);
+
     if servers.is_empty() {
         let msg = Paragraph::new(Text::styled("没有找到服务器", Style::default().fg(Color::Yellow)))
             .block(Block::default().borders(Borders::all()))
             .alignment(Alignment::Center);
-        f.render_widget(msg, main_layout[1]);
+        f.render_widget(msg, main_layout[2]);
     } else {
         let header_cells = [
             "ID (8)", "名称", "主机", "端口", "用户", "认证", "分组"
@@ -348,13 +402,15 @@ fn ui(f: &mut Frame, servers: &[ServerConfig], group_filter: Option<&str>, state
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol("▶ ");
 
-        f.render_stateful_widget(table, main_layout[1], state);
+        f.render_stateful_widget(table, main_layout[2], state);
     }
 
-    let footer_text = Text::styled("↑/k: 上 | ↓/j: 下 | Enter: 连接 | q: 退出", Style::default().fg(Color::DarkGray));
-    let footer = Paragraph::new(footer_text)
-        .alignment(Alignment::Center);
-    f.render_widget(footer, main_layout[2]);
+    let footer_text = Text::styled(
+        "输入: 过滤 | Backspace: 删字符 | ↑/↓: 选择 | Enter: 连接 | Esc: 退出",
+        Style::default().fg(Color::DarkGray),
+    );
+    let footer = Paragraph::new(footer_text).alignment(Alignment::Center);
+    f.render_widget(footer, main_layout[3]);
 }
 
 pub fn run() -> Result<()> {
@@ -427,7 +483,13 @@ pub fn run() -> Result<()> {
                 println!("已退出列表视图。");
             }
         },
-        
+
+        Commands::Connect { server } => {
+            let server_config = find_server(&config_manager, &server)?;
+            println!("准备连接到服务器: {}", server_config.name.clone().green());
+            connect_via_system_ssh(&server_config, false, true)?;
+        },
+
         Commands::Remove { server } => {
             let server_config = config_manager.get_server(&server)?;
             
