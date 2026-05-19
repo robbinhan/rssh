@@ -29,6 +29,10 @@ pub fn is_kitty() -> bool {
     detect() == TerminalKind::Kitty
 }
 
+pub fn is_wezterm() -> bool {
+    detect() == TerminalKind::WezTerm
+}
+
 fn term_program_eq(name: &str) -> bool {
     env::var("TERM_PROGRAM")
         .map(|v| v.eq_ignore_ascii_case(name))

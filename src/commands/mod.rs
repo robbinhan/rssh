@@ -192,12 +192,15 @@ enum Commands {
     SessionStart {
         #[arg(index = 1)]
         session: String,
-        
+
         #[arg(long)]
         tmux: bool,
-        
+
         #[arg(long)]
         kitty: bool,
+
+        #[arg(long)]
+        wezterm: bool,
     },
 }
 
@@ -859,14 +862,25 @@ pub fn run() -> Result<()> {
         Commands::SessionList => {
             let session_manager = SessionManager::new(get_session_dir()?)?;
             let sessions = session_manager.list_sessions()?;
-            
+
             if sessions.is_empty() {
                 println!("没有找到会话配置");
                 return Ok(());
             }
-            
-            println!("共找到 {} 个会话配置", sessions.len().to_string().bright_green().bold());
-            
+
+            println!("共找到 {} 个会话配置\n", sessions.len().to_string().bright_green().bold());
+            for s in &sessions {
+                let short_id = s.id.split('-').next().unwrap_or(&s.id);
+                let desc = s.description.as_deref().unwrap_or("");
+                println!(
+                    "  {}  {}  ({} 窗口)  {}",
+                    short_id.bright_blue(),
+                    s.name.bright_green(),
+                    s.windows.len(),
+                    desc.dimmed()
+                );
+            }
+
             println!("\n提示: 使用 {} 启动会话", "rssh session-start <ID或名称>".bright_yellow());
         },
         
@@ -913,7 +927,7 @@ pub fn run() -> Result<()> {
             println!("会话已删除");
         },
         
-        Commands::SessionStart { session, tmux, kitty } => {
+        Commands::SessionStart { session, tmux, kitty, wezterm } => {
             let session_manager = SessionManager::new(get_session_dir()?)?;
             
             let session_config = if session_manager.session_exists(&session) {
@@ -929,9 +943,17 @@ pub fn run() -> Result<()> {
                 return Err(anyhow::anyhow!("会话 '{}' 没有配置窗口", session_config.name));
             }
             
-            if kitty || (crate::utils::terminal::is_kitty() && !tmux) {
+            if kitty {
                 start_session_with_kitty(&config_manager, &session_config)?;
-            } else if tmux || std::env::var("TMUX").is_ok() {
+            } else if wezterm {
+                start_session_with_wezterm(&config_manager, &session_config)?;
+            } else if tmux {
+                start_session_with_tmux(&config_manager, &session_config)?;
+            } else if crate::utils::terminal::is_kitty() {
+                start_session_with_kitty(&config_manager, &session_config)?;
+            } else if crate::utils::terminal::is_wezterm() {
+                start_session_with_wezterm(&config_manager, &session_config)?;
+            } else if std::env::var("TMUX").is_ok() {
                 start_session_with_tmux(&config_manager, &session_config)?;
             } else {
                 println!("警告: 未检测到支持多窗口的环境，将按顺序连接");
@@ -1189,6 +1211,81 @@ fn start_session_with_tmux(config_manager: &ConfigManager, session: &SessionConf
         .args(["attach-session", "-t", &tmux_session_name])
         .status()
         .context("无法附加到tmux会话")?;
-    
+
     Ok(())
-} 
+}
+
+fn start_session_with_wezterm(config_manager: &ConfigManager, session: &SessionConfig) -> Result<()> {
+    if which::which("wezterm").is_err() {
+        return Err(anyhow::anyhow!("未找到 wezterm 命令"));
+    }
+
+    println!("使用 wezterm 启动会话: {}", session.name.bright_green());
+
+    let mut prev_pane_id: Option<String> = None;
+
+    for (i, window) in session.windows.iter().enumerate() {
+        let server_config = find_server(config_manager, &window.server)?;
+        let title = window.title.as_deref().unwrap_or(&window.server);
+
+        let mut ssh_cmd = format!(
+            "ssh {}@{} -p {}",
+            server_config.username, server_config.host, server_config.port
+        );
+        if let Some(key_path) = server_config.auth_type.get_key_path() {
+            let expanded = crate::utils::ssh_config::expand_tilde(key_path);
+            ssh_cmd.push_str(&format!(" -i {}", shell_escape::escape(expanded.into())));
+        }
+
+        let final_cmd = if let Some(cmd) = &window.command {
+            let escaped = cmd.replace('\'', "'\\''");
+            format!("{} -t '{}; exec $SHELL'", ssh_cmd, escaped)
+        } else {
+            ssh_cmd
+        };
+
+        let bash_wrapper = format!("{}; exec $SHELL", final_cmd);
+
+        let output = if i == 0 {
+            Command::new("wezterm")
+                .args([
+                    "cli", "spawn", "--new-window",
+                    "--", "bash", "-c", &bash_wrapper,
+                ])
+                .output()
+                .context("wezterm cli spawn 失败")?
+        } else {
+            let direction = match window.position.as_deref() {
+                Some("hsplit") => "--bottom",
+                _ => "--right",
+            };
+            let prev = prev_pane_id.as_deref().unwrap_or("");
+            Command::new("wezterm")
+                .args([
+                    "cli", "split-pane", "--pane-id", prev, direction,
+                    "--", "bash", "-c", &bash_wrapper,
+                ])
+                .output()
+                .context("wezterm cli split-pane 失败")?
+        };
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "wezterm 命令失败: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        if i == 0 {
+            let _ = Command::new("wezterm")
+                .args(["cli", "set-tab-title", "--pane-id", &pane_id, title])
+                .status();
+        }
+
+        prev_pane_id = Some(pane_id);
+    }
+
+    Ok(())
+}
