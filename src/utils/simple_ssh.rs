@@ -169,18 +169,30 @@ expect {{
                     args_str.push_str(&format!("{} ", arg));
                 }
 
-                // 创建expect脚本
+                // 创建 expect 脚本。
+                // 关键：`send "...\r"` 里的 `\r` 必须是 expect 层面的转义（字面两
+                // 字符 `\` + `r`），expect 才会真的发出回车。早期版本写成 `\\\r`
+                // 在 Rust 字符串里展开成 `\` + 真 CR，被 expect 当成行连接吃掉，
+                // 导致密码只发了字符、没有回车，服务器一直停在 password 提示。
+                let escaped_password = match &server.auth_type {
+                    AuthType::Password(pwd) => pwd.as_str(),
+                    _ => "",
+                }
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
                 let expect_script = format!(
                     "#!/usr/bin/expect -f\n\
+                     set timeout 30\n\
                      spawn {} {} -o StrictHostKeyChecking=no -o HashKnownHosts=no -o ServerAliveInterval=60 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa\n\
-                     expect \"password:\"\n\
-                     send \"{}\\\r\"\n\
+                     expect {{\n\
+                         -re {{[Pp]assword:}} {{ send \"{password}\\r\" }}\n\
+                         timeout {{ puts stderr \"rssh: timed out waiting for password prompt\"; exit 1 }}\n\
+                         eof {{ puts stderr \"rssh: ssh exited before password prompt\"; exit 1 }}\n\
+                     }}\n\
                      interact",
-                    ssh_path.display(), args_str,
-                    match &server.auth_type {
-                        AuthType::Password(pwd) => pwd,
-                        _ => "",
-                    }.replace("\"", "\\\"").replace("\\", "\\\\")
+                    ssh_path.display(),
+                    args_str,
+                    password = escaped_password,
                 );
 
                 // 创建临时脚本文件
