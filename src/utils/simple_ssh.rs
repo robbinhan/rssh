@@ -2,13 +2,18 @@ use anyhow::{Context, Result};
 use std::process::{Command, Stdio};
 
 use crate::models::{AuthType, ServerConfig};
-use crate::utils::ssh_config::expand_tilde;
+use crate::utils::ssh_config::{expand_tilde, sanitize_host_alias};
 use crate::utils::kitty_transfer::is_kitty_available;
 
 // 使用基于子进程的方法
 // 这个实现直接使用系统的ssh命令，绕过Rust的SSH库
-pub fn connect_via_system_ssh(server: &ServerConfig, use_rzsz: bool, use_kitten: bool) -> Result<i32> {
-    connect_via_system_ssh_with_command(server, None, use_rzsz, use_kitten)
+pub fn connect_via_system_ssh(
+    server: &ServerConfig,
+    use_rzsz: bool,
+    use_kitten: bool,
+    wezterm_mux: bool,
+) -> Result<i32> {
+    connect_via_system_ssh_with_command(server, None, use_rzsz, use_kitten, wezterm_mux)
 }
 
 // 支持命令的版本
@@ -16,12 +21,34 @@ pub fn connect_via_system_ssh_with_command(
     server: &ServerConfig,
     command: Option<String>,
     use_rzsz: bool,
-    use_kitten: bool
+    use_kitten: bool,
+    wezterm_mux: bool,
 ) -> Result<i32> {
     println!("use_kitten: {}", use_kitten);
     // 检查是否使用kitty的kitten ssh
     let use_kitty_kitten = use_kitten && is_kitty_available();
     println!("use_kitty_kitten: {}", use_kitty_kitten);
+
+    // 与 kitty 的 `kitten ssh` 对称：在 wezterm 终端下用 `wezterm connect` 接入由
+    // `wezterm.default_ssh_domains()` 从 ~/.ssh/config 自动生成的多路复用域，
+    // 从而获得断线重连、会话保活的能力（默认 SSHMUX:，wezterm_mux=false 时退化为
+    // 不保活的 SSH: 域）。仅当未走 kitten、当前确实是 wezterm、装了 wezterm，且认证
+    // 方式不依赖 expect 自动填密码（Agent 或纯密钥、无备用密码）时启用；其余情况
+    // （密码认证、密钥+备用密码）继续走下面的普通 ssh / expect 流程。
+    if use_kitten && !use_kitty_kitten {
+        let wezterm_compatible_auth = match &server.auth_type {
+            AuthType::Agent => true,
+            AuthType::Key(_) => server.password.is_none(),
+            AuthType::Password(_) => false,
+        };
+        if wezterm_compatible_auth
+            && crate::utils::terminal::is_wezterm()
+            && which::which("wezterm").is_ok()
+        {
+            return connect_via_wezterm_connect(server, command, wezterm_mux);
+        }
+    }
+
     // 获取系统ssh命令的完整路径
     let ssh_path = if use_kitty_kitten {
         std::path::PathBuf::from("kitten")
@@ -369,6 +396,90 @@ expect {{
     Ok(exit_code)
 }
 
+/// 推导某台服务器对应的 wezterm 多路复用域名。
+///
+/// `wezterm.default_ssh_domains()` 会为 ~/.ssh/config 里每个 `Host <别名>` 生成
+/// `SSH:<别名>`（普通 ssh）和 `SSHMUX:<别名>`（WezTerm 多路复用，断线重连保活）两个域。
+/// 这里的 `<别名>` 必须与 `export-ssh-config` 写入的 `Host` 行一致，因此共用
+/// [`sanitize_host_alias`]。`mux=true` 选 SSHMUX（默认、可保活），否则选 SSH。
+fn wezterm_domain_name(server: &ServerConfig, mux: bool) -> String {
+    let prefix = if mux { "SSHMUX" } else { "SSH" };
+    format!("{}:{}", prefix, sanitize_host_alias(&server.name))
+}
+
+/// 构建 `wezterm connect` 的参数列表（不含 `wezterm` 本身）。抽成纯函数便于单元测试。
+///
+/// 主机的 HostName/User/Port/IdentityFile/ProxyJump 等全部由 ~/.ssh/config 提供，
+/// 不在此处重复传递。
+fn build_wezterm_connect_args(server: &ServerConfig, command: Option<String>, mux: bool) -> Vec<String> {
+    let mut args: Vec<String> = vec!["connect".to_string(), wezterm_domain_name(server, mux)];
+
+    // 远程命令（如有）作为 PROG 追加到 `--` 之后，交给登录 shell 执行
+    if let Some(cmd) = command {
+        args.push("--".to_string());
+        args.push("bash".to_string());
+        args.push("-lc".to_string());
+        args.push(cmd);
+    }
+
+    args
+}
+
+/// 在 wezterm 终端下使用 `wezterm connect <域>` 建立连接，作为 kitty `kitten ssh`
+/// 的对等实现，并额外提供（SSHMUX 域下的）会话保活/断线重连。
+///
+/// 前提（由用户一次性配置）：
+/// 1. 该主机已存在于 ~/.ssh/config（推荐用 `rssh export-ssh-config` 生成后 Include）；
+/// 2. wezterm 配置里 `config.ssh_domains = wezterm.default_ssh_domains()`；
+/// 3. SSHMUX 域还要求**远端安装了 wezterm**（用于跑 mux server）。远端没有 wezterm 时
+///    请用 `--no-mux` 走不保活的 SSH 域。
+///
+/// 注意：`wezterm connect` 会打开一个 wezterm 窗口承载该会话。
+fn connect_via_wezterm_connect(
+    server: &ServerConfig,
+    command: Option<String>,
+    mux: bool,
+) -> Result<i32> {
+    let wezterm_path =
+        which::which("wezterm").unwrap_or_else(|_| std::path::PathBuf::from("wezterm"));
+
+    let domain = wezterm_domain_name(server, mux);
+    let args = build_wezterm_connect_args(server, command, mux);
+
+    println!("正在通过 wezterm connect 接入多路复用域: {}", domain);
+    if mux {
+        println!("提示: SSHMUX 域支持断线重连/会话保活，但要求远端已安装 wezterm");
+        println!("      若远端没有 wezterm，请改用 `rssh connect <名称> --no-mux`");
+    }
+    println!(
+        "前提: 该主机需存在于 ~/.ssh/config，且 wezterm 配置已启用 default_ssh_domains()"
+    );
+    println!("命令: {} {}", wezterm_path.display(), args.join(" "));
+
+    let status = Command::new(&wezterm_path)
+        .args(&args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .with_context(|| "无法启动 wezterm connect 进程")?
+        .wait()
+        .with_context(|| "等待 wezterm connect 进程失败")?;
+
+    println!("\n连接已关闭");
+
+    let exit_code = status.code().unwrap_or(1);
+    if !status.success() {
+        println!("wezterm connect 进程退出，代码: {}", exit_code);
+        println!(
+            "若提示找不到域 '{}'，请确认已用 export-ssh-config 生成主机并在 wezterm 启用 default_ssh_domains()",
+            domain
+        );
+    }
+
+    Ok(exit_code)
+}
+
 /// 检查系统是否安装了lrzsz
 fn is_lrzsz_installed() -> bool {
     let rz_installed = Command::new("which")
@@ -524,5 +635,64 @@ pub fn ssh_command_connect(server: &ServerConfig, use_kitten: bool) -> Result<()
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn srv_named(name: &str, port: u16, auth: AuthType, password: Option<String>) -> ServerConfig {
+        ServerConfig::new(
+            "id".into(),
+            name.into(),
+            "example.com".into(),
+            port,
+            "alice".into(),
+            auth,
+            None,
+            None,
+            password,
+        )
+    }
+
+    fn srv(port: u16, auth: AuthType, password: Option<String>) -> ServerConfig {
+        srv_named("myhost", port, auth, password)
+    }
+
+    #[test]
+    fn domain_name_defaults_to_sshmux() {
+        assert_eq!(wezterm_domain_name(&srv(22, AuthType::Agent, None), true), "SSHMUX:myhost");
+    }
+
+    #[test]
+    fn domain_name_no_mux_uses_plain_ssh_domain() {
+        assert_eq!(wezterm_domain_name(&srv(22, AuthType::Agent, None), false), "SSH:myhost");
+    }
+
+    #[test]
+    fn domain_name_sanitizes_server_name_like_export() {
+        // 别名必须与 export-ssh-config 写入的 Host 一致（空格/通配符 -> -）
+        let s = srv_named("prod web*", 22, AuthType::Agent, None);
+        assert_eq!(wezterm_domain_name(&s, true), "SSHMUX:prod-web-");
+    }
+
+    #[test]
+    fn connect_args_basic() {
+        let args = build_wezterm_connect_args(&srv(22, AuthType::Agent, None), None, true);
+        assert_eq!(args, vec!["connect".to_string(), "SSHMUX:myhost".to_string()]);
+        // 连接信息全部来自 ~/.ssh/config，这里不应再出现 host/port/-i 等
+        assert!(!args.iter().any(|a| a.contains('@') || a == "-p" || a == "-i"));
+    }
+
+    #[test]
+    fn connect_args_appends_remote_command_after_separator() {
+        let args =
+            build_wezterm_connect_args(&srv(22, AuthType::Agent, None), Some("uptime".into()), true);
+        let sep = args.iter().position(|a| a == "--").expect("应包含 --");
+        assert_eq!(
+            &args[sep + 1..],
+            &["bash".to_string(), "-lc".to_string(), "uptime".to_string()]
+        );
     }
 }

@@ -71,6 +71,29 @@ rssh import --config /path/to/ssh/config --group work
 rssh import --skip-existing
 ```
 
+### 导出为 ~/.ssh/config 可直接 Include 的文件
+
+将所有服务器导出成一份标准 OpenSSH config 语法的文件：
+
+```bash
+rssh export-ssh-config ~/.ssh/rssh_config
+```
+
+然后在 `~/.ssh/config` 顶部加入一行（使用绝对路径）：
+
+```text
+Include ~/.ssh/rssh_config
+```
+
+之后即可直接用 `ssh <别名>` 连接（别名为服务器名称，名称中的空格/通配符会被替换为 `-`，重名会自动追加 `-2`、`-3` 后缀）。
+
+说明：
+- 密钥认证会写入 `IdentityFile` 与 `IdentitiesOnly yes`；
+- SSH Agent 认证只写基本连接信息；
+- 密码认证由于 ssh config 无法保存明文密码，会写出连接信息但连接时需手动输入密码。
+
+> 注意：`rssh export <目录>` 导出的是 rssh 自己的 JSON 备份（配合 `rssh import-config` 使用），**不能**被 `Include`；要被 `Include` 请使用 `export-ssh-config`。
+
 ### 列出所有服务器
 
 ```bash
@@ -100,6 +123,46 @@ rssh connect myserver
 # 使用russh库连接（基于异步Rust的SSH实现**实验中**）
 rssh connect myserver --mode russh
 ```
+
+##### 终端原生 SSH 集成
+
+`rssh connect` 会根据当前终端自动选择更好的 SSH 前端（仅密钥/Agent 认证、且密钥未配置备用密码时生效）：
+
+- **Kitty 终端**：使用 `kitten ssh`，在当前窗口内联连接。
+- **WezTerm 终端**：使用 `wezterm connect SSHMUX:<别名>`，接入 wezterm 的多路复用域，**支持断线重连 / 会话保活**。
+- **其它终端 / 密码认证 / 密钥+备用密码**：回退为系统 `ssh`（密码认证仍走 expect 自动填充）。
+
+###### WezTerm 多路复用一次性配置
+
+WezTerm 路径连接的是「多路复用域」而非单台主机，需要先做两步配置（之后所有主机通用）：
+
+1. 把 rssh 的服务器导出成 ssh config 并 Include：
+
+   ```bash
+   rssh export-ssh-config ~/.ssh/rssh_config
+   # 然后在 ~/.ssh/config 顶部加: Include ~/.ssh/rssh_config
+   ```
+
+2. 在 `~/.wezterm.lua` 启用从 `~/.ssh/config` 自动生成域：
+
+   ```lua
+   local wezterm = require 'wezterm'
+   local config = wezterm.config_builder()
+   config.ssh_domains = wezterm.default_ssh_domains()
+   return config
+   ```
+
+   `default_ssh_domains()` 会为每个 `Host` 生成 `SSH:<别名>`（普通 ssh）和
+   `SSHMUX:<别名>`（多路复用、可保活）两个域；HostName/User/Port/密钥/ProxyJump
+   全部从 `~/.ssh/config` 读取，无需在 lua 里重复。
+
+域名里的 `<别名>` 就是 `export-ssh-config` 写入的 `Host` 别名（服务器名经清洗，空格/通配符替换为 `-`）。
+
+注意事项：
+
+- **`SSHMUX:` 域要求远端也安装了 wezterm**（用于运行 mux server）。远端没有 wezterm 时，用 `rssh connect <名称> --no-mux` 走不保活的 `SSH:` 域。
+- 若服务器重名导致 `export-ssh-config` 追加了 `-2`/`-3` 后缀，单机 `connect` 无法还原该后缀，请避免服务器重名。
+- `wezterm connect` 会打开一个 wezterm 窗口承载该会话。
 
 
 ### 在服务器上执行命令

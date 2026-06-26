@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::fs;
 
 use crate::models::{AuthType, ServerConfig};
-use crate::utils::ssh_config::expand_tilde;
+use crate::utils::ssh_config::{expand_tilde, sanitize_host_alias};
 
 pub struct ConfigManager {
     conn: Arc<Mutex<Connection>>,
@@ -286,6 +286,92 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// 导出为 OpenSSH config 语法的单个文件，可被 ~/.ssh/config 通过 Include 引入。
+    ///
+    /// 与 `export_config` 不同：这里生成的是标准 ssh_config 文本（Host/HostName/...），
+    /// 而不是 rssh 自己的 JSON 备份格式。
+    pub fn export_ssh_config(&self, export_file: &PathBuf) -> Result<()> {
+        // 确保父目录存在
+        if let Some(parent) = export_file.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("无法创建导出目录: {}", parent.display()))?;
+            }
+        }
+
+        let servers = self.list_servers()?;
+
+        let mut content = String::new();
+        content.push_str("# RSSH 导出的 SSH config\n");
+        content.push_str(&format!(
+            "# 导出时间: {}\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        ));
+        content.push_str("#\n");
+        content.push_str("# 用法: 在 ~/.ssh/config 顶部加入一行(使用绝对路径):\n");
+        content.push_str(&format!("#   Include {}\n", export_file.display()));
+        content.push_str("# 之后即可使用 `ssh <别名>` 连接。\n\n");
+
+        // 别名去重，避免重复 Host 块
+        let mut used_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut password_count = 0;
+
+        for server in &servers {
+            let alias = unique_host_alias(&sanitize_host_alias(&server.name), &mut used_aliases);
+
+            // 描述 / 分组写成注释
+            let mut comment_parts = Vec::new();
+            if let Some(desc) = &server.description {
+                if !desc.trim().is_empty() {
+                    comment_parts.push(desc.trim().to_string());
+                }
+            }
+            if let Some(group) = &server.group {
+                if !group.trim().is_empty() {
+                    comment_parts.push(format!("分组: {}", group.trim()));
+                }
+            }
+            if !comment_parts.is_empty() {
+                content.push_str(&format!("# {}\n", comment_parts.join(" | ")));
+            }
+
+            content.push_str(&format!("Host {}\n", alias));
+            content.push_str(&format!("    HostName {}\n", server.host));
+            content.push_str(&format!("    Port {}\n", server.port));
+            content.push_str(&format!("    User {}\n", server.username));
+
+            match &server.auth_type {
+                AuthType::Key(key_path) => {
+                    // ssh 自身支持 ~，保留原始路径即可
+                    content.push_str(&format!("    IdentityFile {}\n", key_path));
+                    content.push_str("    IdentitiesOnly yes\n");
+                }
+                AuthType::Agent => {
+                    // 走 ssh-agent，无需额外指令
+                }
+                AuthType::Password(_) => {
+                    // ssh config 无法保存明文密码，连接时交互式输入
+                    content.push_str("    # 密码认证: ssh config 无法保存密码，连接时需手动输入\n");
+                    password_count += 1;
+                }
+            }
+
+            content.push('\n');
+        }
+
+        fs::write(export_file, content)
+            .with_context(|| format!("无法写入 ssh config 文件: {}", export_file.display()))?;
+
+        if password_count > 0 {
+            println!(
+                "注意: 有 {} 个服务器为密码认证，ssh config 无法保存密码，连接时需手动输入。",
+                password_count
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn import_config(&self, import_path: &PathBuf) -> Result<()> {
         // 检查是否是目录
         if !import_path.is_dir() {
@@ -305,7 +391,88 @@ impl ConfigManager {
                 self.add_server(server)?;
             }
         }
-        
+
         Ok(())
+    }
+}
+
+/// 保证别名唯一，冲突时追加 `-2`、`-3` 等后缀。
+fn unique_host_alias(
+    alias: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    if used.insert(alias.to_string()) {
+        return alias.to_string();
+    }
+
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{}-{}", alias, suffix);
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dedupes_colliding_aliases() {
+        let mut used = std::collections::HashSet::new();
+        assert_eq!(unique_host_alias("web", &mut used), "web");
+        assert_eq!(unique_host_alias("web", &mut used), "web-2");
+        assert_eq!(unique_host_alias("web", &mut used), "web-3");
+    }
+
+    #[test]
+    fn export_ssh_config_emits_valid_blocks() {
+        let base = std::env::temp_dir().join(format!("rssh-test-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let db_path = base.join("test.db");
+        let out_path = base.join("exported_config");
+
+        let mgr = ConfigManager::new(db_path).unwrap();
+
+        // key 认证，名称含空格 -> 别名应被清洗
+        mgr.add_server(ServerConfig::new(
+            "1".into(), "prod web".into(), "10.0.0.1".into(), 2222, "deploy".into(),
+            AuthType::Key("~/.ssh/id_ed25519".into()), None, Some("生产机".into()), None,
+        )).unwrap();
+        // agent 认证
+        mgr.add_server(ServerConfig::new(
+            "2".into(), "bastion".into(), "10.0.0.2".into(), 22, "root".into(),
+            AuthType::Agent, Some("infra".into()), None, None,
+        )).unwrap();
+        // 密码认证 -> 不应出现 IdentityFile，应出现密码注释
+        mgr.add_server(ServerConfig::new(
+            "3".into(), "db".into(), "10.0.0.3".into(), 22, "admin".into(),
+            AuthType::Password("secret".into()), None, None, Some("secret".into()),
+        )).unwrap();
+        // 同名 -> 别名去重
+        mgr.add_server(ServerConfig::new(
+            "4".into(), "bastion".into(), "10.0.0.4".into(), 22, "root".into(),
+            AuthType::Agent, None, None, None,
+        )).unwrap();
+
+        mgr.export_ssh_config(&out_path).unwrap();
+        let content = fs::read_to_string(&out_path).unwrap();
+
+        assert!(content.contains("Host prod-web"));
+        assert!(content.contains("    HostName 10.0.0.1"));
+        assert!(content.contains("    Port 2222"));
+        assert!(content.contains("    IdentityFile ~/.ssh/id_ed25519"));
+        assert!(content.contains("    IdentitiesOnly yes"));
+        assert!(content.contains("Host bastion\n"));
+        assert!(content.contains("Host bastion-2\n"));
+        // 密码认证不写明文密码
+        assert!(!content.contains("secret"));
+        assert!(content.contains("密码认证"));
+        // Include 用法提示存在
+        assert!(content.contains("Include"));
+
+        fs::remove_dir_all(&base).ok();
     }
 } 

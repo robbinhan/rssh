@@ -24,6 +24,33 @@ pub fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+/// 将服务器名转换为合法的 ssh Host 别名。
+///
+/// ssh 的 Host 模式以空白分隔，且 `*`/`?` 是通配符，因此将这些字符替换为 `-`，
+/// 避免一个名称被解析成多个别名或被当作通配匹配。
+///
+/// 这是 `export-ssh-config` 写入 `Host` 行、以及 wezterm `connect` 推导
+/// `SSHMUX:<别名>` 域名时**共用**的规则，必须保持一致。
+pub fn sanitize_host_alias(name: &str) -> String {
+    let sanitized: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_whitespace() || c == '*' || c == '?' {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+
+    if sanitized.is_empty() {
+        "unnamed".to_string()
+    } else {
+        sanitized
+    }
+}
+
 pub struct SshConfigEntry {
     pub host: String,
     pub hostname: Option<String>,
@@ -140,11 +167,28 @@ pub fn parse_ssh_config<P: AsRef<Path>>(path: P) -> Result<Vec<SshConfigEntry>> 
 
 pub fn import_ssh_config<P: AsRef<Path>>(path: P) -> Result<Vec<ServerConfig>> {
     let entries = parse_ssh_config(path)?;
-    
+
     let configs: Vec<ServerConfig> = entries
         .iter()
         .filter_map(|entry| entry.to_server_config())
         .collect();
-    
+
     Ok(configs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes_whitespace_and_glob_chars() {
+        assert_eq!(sanitize_host_alias("my server"), "my-server");
+        assert_eq!(sanitize_host_alias("prod*?"), "prod--");
+        assert_eq!(sanitize_host_alias("  web-1  "), "web-1");
+    }
+
+    #[test]
+    fn falls_back_for_empty_name() {
+        assert_eq!(sanitize_host_alias("   "), "unnamed");
+    }
 } 

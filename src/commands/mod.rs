@@ -88,8 +88,13 @@ enum Commands {
 
     Connect {
         server: String,
+
+        /// 在 wezterm 终端下，使用不保活的 SSH: 域而非默认的 SSHMUX: 多路复用域
+        /// （当远端未安装 wezterm、无法跑 mux server 时使用）
+        #[arg(long = "no-mux")]
+        no_mux: bool,
     },
-    
+
     Remove {
         server: String,
     },
@@ -138,6 +143,12 @@ enum Commands {
     },
     
     Export {
+        #[arg(index = 1)]
+        path: PathBuf,
+    },
+
+    #[command(name = "export-ssh-config")]
+    ExportSshConfig {
         #[arg(index = 1)]
         path: PathBuf,
     },
@@ -478,16 +489,16 @@ pub fn run() -> Result<()> {
 
             if let Some(server_to_connect) = selected_server_option {
                 println!("准备连接到选中的服务器: {}", server_to_connect.name.clone().green());
-                connect_via_system_ssh(&server_to_connect, false, true)?;
+                connect_via_system_ssh(&server_to_connect, false, true, true)?;
             } else {
                 println!("已退出列表视图。");
             }
         },
 
-        Commands::Connect { server } => {
+        Commands::Connect { server, no_mux } => {
             let server_config = find_server(&config_manager, &server)?;
             println!("准备连接到服务器: {}", server_config.name.clone().green());
-            connect_via_system_ssh(&server_config, false, true)?;
+            connect_via_system_ssh(&server_config, false, true, !no_mux)?;
         },
 
         Commands::Remove { server } => {
@@ -785,6 +796,16 @@ pub fn run() -> Result<()> {
             println!("配置已导出到: {}", path.display());
         },
 
+        Commands::ExportSshConfig { path } => {
+            config_manager.export_ssh_config(&path)?;
+            println!("SSH config 已导出到: {}", path.display());
+            println!(
+                "在 ~/.ssh/config 顶部加入一行即可使用: {} {}",
+                "Include".bright_cyan(),
+                path.display()
+            );
+        },
+
         Commands::ImportConfig { path } => {
             config_manager.import_config(&path)?;
             println!("配置已从 {} 导入", path.display());
@@ -1025,7 +1046,7 @@ pub fn run() -> Result<()> {
                     
                     println!("连接到 {}", server_config.name.bright_green());
                     
-                    match connect_via_system_ssh_with_command(&server_config, window.command.clone(), false, false) {
+                    match connect_via_system_ssh_with_command(&server_config, window.command.clone(), false, false, true) {
                         Ok(exit_code) => {
                             if exit_code != 0 {
                                 eprintln!("警告: 服务器 {} 返回非零状态码: {}", 
